@@ -1,13 +1,13 @@
 # Singularity Write
 
-Document editor for the Singularity Desktop.
+Markdown editor and PDF reader for the Singularity Desktop.
 
 ## Requirements
 
 - [Meson](https://mesonbuild.com/) >= 0.59
 - [Vala](https://vala.dev/) compiler
 - [Vetro](https://github.com/singularityos-lab/vetro/) compiler
-- GTK4, libgee-0.8, webkitgtk-6.0, gtksourceview-5
+- GTK4, libgee-0.8, webkitgtk-6.0, gtksourceview-5, poppler-glib
 - [libsingularity](https://github.com/singularityos-lab/libsingularity)
 
 ## Build & Install
