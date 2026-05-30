@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="dev.sinty.write" path="/dev/sinty/write/">
+    <key name="recent-files" type="as">
+      <default>[]</default>
+      <summary>Recently opened files</summary>
+    </key>
+    <key name="default-font" type="s">
+      <default>'Liberation Serif'</default>
+      <summary>Default document font family</summary>
+    </key>
+    <key name="default-font-size" type="i">
+      <default>12</default>
+      <summary>Default document font size in points</summary>
+    </key>
+    <key name="show-ruler" type="b">
+      <default>true</default>
+      <summary>Show the page ruler</summary>
+    </key>
+    <key name="show-outline" type="b">
+      <default>true</default>
+      <summary>Show the document outline sidebar</summary>
+    </key>
+    <key name="autosave-interval" type="i">
+      <default>60</default>
+      <summary>Autosave interval in seconds, 0 to disable</summary>
+    </key>
+    <key name="left-margin-mm" type="d">
+      <default>25.4</default>
+      <summary>Left page margin in millimetres</summary>
+    </key>
+    <key name="right-margin-mm" type="d">
+      <default>25.4</default>
+      <summary>Right page margin in millimetres</summary>
+    </key>
+    <key name="md-color-scheme" type="s">
+      <default>'auto'</default>
+      <summary>Color scheme for Markdown source editor (auto, onedark, dracula, nord, classic, etc.)</summary>
+    </key>
+    <key name="smart-quotes" type="b">
+      <default>true</default>
+      <summary>Replace straight quotes with typographic (curly) quotes while typing</summary>
+    </key>
+  </schema>
+</schemalist>

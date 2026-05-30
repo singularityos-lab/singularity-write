@@ -1,0 +1,114 @@
+<svg width="236" height="236" viewBox="0 0 236 236" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <clipPath id="cw"><rect width="236" height="236" fill="white"/></clipPath>
+
+  <!-- Document face gradient: bright white top-left → cool paper white -->
+  <linearGradient id="doc_front" x1="53" y1="30" x2="185" y2="205" gradientUnits="userSpaceOnUse">
+    <stop offset="0%"  stop-color="#ffffff"/>
+    <stop offset="70%" stop-color="#eef4f8"/>
+    <stop offset="100%" stop-color="#dde9f1"/>
+  </linearGradient>
+  <linearGradient id="doc_mid" x1="53" y1="30" x2="185" y2="205" gradientUnits="userSpaceOnUse">
+    <stop offset="0%"  stop-color="#ccdce6"/>
+    <stop offset="100%" stop-color="#93b4c6"/>
+  </linearGradient>
+  <linearGradient id="doc_back" x1="53" y1="30" x2="185" y2="205" gradientUnits="userSpaceOnUse">
+    <stop offset="0%"  stop-color="#9bbdd0"/>
+    <stop offset="100%" stop-color="#6896ae"/>
+  </linearGradient>
+
+  <!-- Fold underside gradient -->
+  <linearGradient id="fold_g" x1="163" y1="30" x2="185" y2="52" gradientUnits="userSpaceOnUse">
+    <stop offset="0%"  stop-color="#b8d0dc"/>
+    <stop offset="100%" stop-color="#deeaf2"/>
+  </linearGradient>
+
+  <!-- Bloom: white sheen top-left -->
+  <radialGradient id="bloom_w" cx="82" cy="68" r="88" gradientUnits="userSpaceOnUse">
+    <stop offset="0%"  stop-color="white" stop-opacity="0.55"/>
+    <stop offset="100%" stop-color="white" stop-opacity="0"/>
+  </radialGradient>
+
+  <!-- Same shadow filter style as other icons -->
+  <filter id="fshadow_w" x="40" y="22" width="162" height="194" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+    <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+    <feOffset dy="3"/>
+    <feGaussianBlur stdDeviation="5"/>
+    <feComposite in2="hardAlpha" operator="out"/>
+    <feColorMatrix type="matrix" values="0 0 0 0 0.02 0 0 0 0 0.15 0 0 0 0 0.28 0 0 0 0.55 0"/>
+    <feBlend mode="normal" in2="BackgroundImageFix" result="e1"/>
+    <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+    <feOffset dy="-2"/>
+    <feComposite in2="hardAlpha" operator="out"/>
+    <feColorMatrix type="matrix" values="0 0 0 0 0.00 0 0 0 0 0.10 0 0 0 0 0.24 0 0 0 0.30 0"/>
+    <feBlend mode="normal" in2="e1" result="e2"/>
+    <feBlend mode="normal" in="SourceGraphic" in2="e2"/>
+  </filter>
+
+  <!-- Clip to doc front face shape (for bloom) -->
+  <clipPath id="doc_face_clip">
+    <path d="M 59,30 L 161,30 L 183,52 L 183,198 Q 183,204 177,204 L 59,204 Q 53,204 53,198 L 53,36 Q 53,30 59,30 Z"/>
+  </clipPath>
+</defs>
+
+<g clip-path="url(#cw)">
+
+  <!-- 3D depth layers: back → mid → front -->
+  <!-- Layer 3 (deepest, y+2) -->
+  <path d="M 59,32 L 161,32 L 183,54 L 183,200 Q 183,206 177,206 L 59,206 Q 53,206 53,200 L 53,38 Q 53,32 59,32 Z" fill="url(#doc_back)"/>
+  <!-- Layer 2 (mid, y+1) -->
+  <path d="M 59,31 L 161,31 L 183,53 L 183,199 Q 183,205 177,205 L 59,205 Q 53,205 53,199 L 53,37 Q 53,31 59,31 Z" fill="url(#doc_mid)"/>
+
+  <!-- Main document face (front, with drop shadow) -->
+  <path d="M 59,30 L 161,30 L 183,52 L 183,198 Q 183,204 177,204 L 59,204 Q 53,204 53,198 L 53,36 Q 53,30 59,30 Z" fill="url(#doc_front)" filter="url(#fshadow_w)"/>
+
+  <!-- Dog-ear fold: underside triangle -->
+  <path d="M 161,30 L 183,52 L 161,52 Z" fill="url(#fold_g)"/>
+  <!-- Fold crease -->
+  <line x1="161" y1="30" x2="161" y2="52" stroke="#a8c4d0" stroke-width="0.8"/>
+  <line x1="161" y1="52" x2="183" y2="52" stroke="#a8c4d0" stroke-width="0.8"/>
+
+  <!-- Bloom highlight (top-left white sheen) -->
+  <g clip-path="url(#doc_face_clip)">
+    <circle cx="82" cy="68" r="88" fill="url(#bloom_w)"/>
+  </g>
+
+  <!-- ── Text lines (wavy, suggesting paragraphs) ── -->
+
+  <!-- Heading (shorter, bolder, darker) -->
+  <path d="M 70,72 C 84,69 96,75 108,72 C 117,70 124,71 138,72"
+        stroke="#3d7a94" stroke-width="3.2" stroke-linecap="round" fill="none"/>
+
+  <!-- Para 1, line 1 (full width) -->
+  <path d="M 70,90 C 85,87 97,93 111,90 C 126,87 140,93 154,90 C 163,88 169,89 175,90"
+        stroke="#7db0c4" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <!-- Para 1, line 2 -->
+  <path d="M 70,101 C 86,98 100,104 114,101 C 130,98 144,104 158,101 C 165,100 170,100 175,101"
+        stroke="#7db0c4" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <!-- Para 1, line 3 (short, end of paragraph) -->
+  <path d="M 70,112 C 83,109 95,115 107,112 C 116,110 124,111 135,112"
+        stroke="#7db0c4" stroke-width="2" stroke-linecap="round" fill="none"/>
+
+  <!-- Para 2, line 1 -->
+  <path d="M 70,128 C 86,125 100,131 114,128 C 129,125 143,131 157,128 C 165,127 170,127 175,128"
+        stroke="#7db0c4" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <!-- Para 2, line 2 -->
+  <path d="M 70,139 C 84,136 98,142 112,139 C 127,136 142,142 156,139 C 164,138 169,138 175,139"
+        stroke="#7db0c4" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <!-- Para 2, line 3 (short) -->
+  <path d="M 70,150 C 84,147 97,153 110,150 C 120,148 128,149 144,150"
+        stroke="#7db0c4" stroke-width="2" stroke-linecap="round" fill="none"/>
+
+  <!-- Para 3, line 1 -->
+  <path d="M 70,166 C 85,163 99,169 113,166 C 128,163 143,169 157,166 C 164,165 170,165 175,166"
+        stroke="#7db0c4" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <!-- Para 3, line 2 (short) -->
+  <path d="M 70,177 C 84,174 97,180 111,177 C 122,175 131,176 148,177"
+        stroke="#7db0c4" stroke-width="2" stroke-linecap="round" fill="none"/>
+
+  <!-- Right edge highlight line (3D illusion) -->
+  <line x1="183" y1="56" x2="183" y2="196" stroke="rgba(255,255,255,0.25)" stroke-width="1"/>
+
+</g>
+</svg>

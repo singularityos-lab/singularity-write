@@ -1,0 +1,30 @@
+{
+    "schema-id": "dev.sinty.write",
+    "settings": [
+        {
+            "key": "md-color-scheme",
+            "label": "Color Scheme",
+            "type": "string",
+            "widget": "color-scheme-selector",
+            "theme-set": "edit"
+        },
+        {
+            "key": "show-outline",
+            "label": "Show Outline Sidebar",
+            "type": "boolean",
+            "widget": "switch"
+        },
+        {
+            "key": "show-ruler",
+            "label": "Show Page Ruler",
+            "type": "boolean",
+            "widget": "switch"
+        },
+        {
+            "key": "smart-quotes",
+            "label": "Smart Quotes",
+            "type": "boolean",
+            "widget": "switch"
+        }
+    ]
+}
