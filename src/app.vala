@@ -13,11 +13,7 @@ namespace Singularity.Apps {
         private WriteWindow main_window;
         private Singularity.Widgets.ToolBar toolbar { get { return main_window.toolbar; } }
         private Singularity.Widgets.PageCanvas  page_canvas;
-        private Singularity.Widgets.FloatingFormatBar format_bar;
         private Singularity.Widgets.FindReplaceBar    find_bar;
-        private Singularity.Widgets.StyleChooser      style_chooser;
-        private Gtk.Entry       _font_entry;
-        private Gtk.SpinButton  _size_spin;
         private bool            _font_ctrl_updating = false;
 
         private Gtk.TextView   text_view;
@@ -55,7 +51,6 @@ namespace Singularity.Apps {
         private uint          autosave_id  = 0;
         private int           footnote_num = 0;
         private bool          _updating_sel = false;
-        private bool          _format_bar_updating = false;
 
         // Word-like UX state
         private bool          _auto_format_lock  = false;
@@ -99,8 +94,6 @@ namespace Singularity.Apps {
             build_ui();
             settings.changed["md-color-scheme"].connect(update_md_color_scheme);
             if (files.length > 0) {
-                main_window.flat = false;
-                toolbar.visible = true;
                 do_open(files[0]);
             } else {
                 show_start_page();
@@ -245,170 +238,77 @@ namespace Singularity.Apps {
             });
         }
 
-        private void build_toolbar() {
-            toolbar.is_static = false;
+        // Tracked so they can be hidden on the welcome page and re-shown when a document opens.
+        private GLib.List<Widget> _doc_bubbles = new GLib.List<Widget>();
 
-            // File actions
-            var new_btn  = new Singularity.Widgets.IconButton("document-new-symbolic",  "New (Ctrl+N)");
-            var open_btn = new Singularity.Widgets.IconButton("document-open-symbolic",  "Open (Ctrl+O)");
-            var save_btn = new Singularity.Widgets.IconButton("document-save-symbolic",  "Save (Ctrl+S)");
-            _export_btn = new Singularity.Widgets.IconButton("document-send-symbolic", "Export / Print…");
-            var export_btn = _export_btn;
-            new_btn.clicked.connect(on_new);
-            open_btn.clicked.connect(on_open);
-            save_btn.clicked.connect(on_save);
-            export_btn.clicked.connect(on_export);
-            toolbar.pack_start(new_btn);
-            toolbar.pack_start(open_btn);
-            toolbar.pack_start(save_btn);
-            toolbar.pack_start(export_btn);
+        private void track_bubble(Widget w) {
+            _doc_bubbles.append(w);
+        }
 
-            var sep1 = new Separator(Orientation.VERTICAL);
-            sep1.margin_top = 8; sep1.margin_bottom = 8;
-            toolbar.pack_start(sep1);
-
-            // Outline sidebar toggle
-            var sidebar_btn = new Singularity.Widgets.IconButton("sidebar-show-symbolic", "Toggle Outline");
-            sidebar_btn.clicked.connect(() => {
-                _sidebar_revealer.reveal_child = !_sidebar_revealer.reveal_child;
-            });
-            toolbar.pack_start(sidebar_btn);
-
-            var sep2 = new Separator(Orientation.VERTICAL);
-            sep2.margin_top = 8; sep2.margin_bottom = 8;
-            toolbar.pack_start(sep2);
-
-            // Insert popover: single button opens popover with all insert options
-            var insert_popover = new Popover();
-            insert_popover.has_arrow = false;
-
-            var insert_box = new Box(Orientation.VERTICAL, 2);
-            insert_box.margin_top = 4;
-            insert_box.margin_bottom = 4;
-            insert_box.margin_start = 4;
-            insert_box.margin_end = 4;
-
-            string[] insert_icons  = { "view-list-bullet-symbolic", "view-list-ordered-symbolic", "x-office-spreadsheet-symbolic", "insert-image-symbolic", "insert-link-symbolic", "format-indent-more-symbolic" };
-            string[] insert_labels = { "Bullet List", "Numbered List", "Table", "Image", "Link", "Footnote" };
-            string[] insert_ids    = { "bullet", "numbered", "table", "image", "link", "footnote" };
-
-            for (int ii = 0; ii < insert_icons.length; ii++) {
-                var row = new Box(Orientation.HORIZONTAL, 8);
-                row.margin_top = 2; row.margin_bottom = 2;
-                row.margin_start = 4; row.margin_end = 8;
-                var ico = new Image.from_icon_name(insert_icons[ii]);
-                ico.pixel_size = 16;
-                var lbl = new Label(insert_labels[ii]);
-                lbl.halign = Align.START;
-                row.append(ico);
-                row.append(lbl);
-                var ibtn = new Button();
-                ibtn.set_child(row);
-                ibtn.has_frame = false;
-                ibtn.add_css_class("singularity-button");
-                string captured_id = insert_ids[ii];
-                ibtn.clicked.connect(() => {
-                    insert_popover.popdown();
-                    switch (captured_id) {
-                        case "bullet":   apply_list_style(true);    text_view.grab_focus(); break;
-                        case "numbered": apply_list_style(false);   text_view.grab_focus(); break;
-                        case "table":    on_insert_table();   break;
-                        case "image":    on_insert_image();   break;
-                        case "link":     on_link_requested(); break;
-                        case "footnote": on_insert_footnote(); break;
-                    }
-                });
-                insert_box.append(ibtn);
+        public void set_doc_bubbles_visible(bool visible) {
+            foreach (var w in _doc_bubbles) {
+                w.visible = visible;
             }
-            insert_popover.set_child(insert_box);
+        }
 
-            var insert_btn = new MenuButton();
-            insert_btn.icon_name = "list-add-symbolic";
-            insert_btn.tooltip_text = "Insert";
-            insert_btn.has_frame = false;
-            insert_btn.add_css_class("singularity-button");
-            insert_btn.set_popover(insert_popover);
-            toolbar.pack_start(insert_btn);
+        private void build_toolbar() {
+            // Drag bubble is auto-added by the Window's bubble bar to the far left.
+            track_bubble(main_window.add_bubble_icon(
+                "go-previous-symbolic", "Back to Start (close document)",
+                () => on_close_document()));
 
-            // Right side
-            var find_btn = new Singularity.Widgets.IconButton("edit-find-symbolic", "Find & Replace (Ctrl+F)");
-            find_btn.clicked.connect(() => find_bar.open_find());
+            track_bubble(main_window.add_bubble_icon("sidebar-show-symbolic", "Toggle Outline", () => {
+                _sidebar_revealer.reveal_child = !_sidebar_revealer.reveal_child;
+            }));
 
-            word_count_label = new Label("0 words");
-            word_count_label.add_css_class("dim-label");
-            word_count_label.add_css_class("caption");
+            track_bubble(main_window.add_bubble_icon("document-new-symbolic",  "New (Ctrl+N)",   () => on_new()));
+            track_bubble(main_window.add_bubble_icon("document-open-symbolic", "Open (Ctrl+O)",  () => on_open()));
 
-            // Close document button on the right - goes back to start page
-            var close_doc_btn = new Singularity.Widgets.IconButton("go-previous-symbolic", "Back to Start (close document)");
-            close_doc_btn.clicked.connect(on_close_document);
-
-            toolbar.pack_end(find_btn);
-            toolbar.pack_end(word_count_label);
-            toolbar.pack_end(close_doc_btn);
-
-            // ODT style chooser + font family + size (center title widget)
-            style_chooser = new Singularity.Widgets.StyleChooser();
-            style_chooser.style_selected.connect(on_style_selected);
-
-            _font_entry = new Entry();
-            _font_entry.placeholder_text = "Font";
-            _font_entry.width_chars = 16;
-            _font_entry.tooltip_text = "Font Family";
-            // EntryCompletion for system fonts (populated lazily after realize)
-            var completion = new EntryCompletion();
-            var font_store = new Gtk.ListStore(1, typeof(string));
-            completion.set_model(font_store);
-            completion.set_text_column(0);
-            completion.inline_completion = true;
-            _font_entry.set_completion(completion);
-            _font_entry.realize.connect_after(() => {
-                Pango.FontFamily[] fam_list;
-                _font_entry.get_pango_context().list_families(out fam_list);
-                foreach (var fam in fam_list) {
-                    Gtk.TreeIter it;
-                    font_store.append(out it);
-                    font_store.set(it, 0, fam.get_name());
-                }
+            var save_btn = main_window.add_bubble_icon(
+                "document-save-symbolic", "Save (Ctrl+S)", () => {});
+            save_btn.clicked.connect(() => {
+                var menu = new Singularity.Widgets.ContextMenu(save_btn);
+                menu.add_item("Save",     "document-save-symbolic",   () => on_save());
+                menu.add_item("Save As…", "document-save-as-symbolic", () => on_save_as());
+                menu.add_separator();
+                menu.add_item("Export / Print…", "document-send-symbolic", () => on_export());
+                menu.closed.connect(() => { menu.unparent(); });
+                menu.popup();
             });
-            _font_entry.activate.connect(() => {
-                if (_font_ctrl_updating) return;
-                string fname = _font_entry.text.strip();
-                if (fname == "") return;
-                Gtk.TextIter s, e;
-                if (!text_buffer.get_selection_bounds(out s, out e)) return;
-                var desc = new Pango.FontDescription();
-                desc.set_family(fname);
-                desc.set_size((int)(_size_spin.value * Pango.SCALE));
-                apply_font_desc(desc);
-                text_view.grab_focus();
-            });
+            track_bubble(save_btn);
 
-            var adj = new Adjustment(12, 6, 96, 1, 4, 0);
-            _size_spin = new SpinButton(adj, 1, 0);
-            _size_spin.width_chars = 4;
-            _size_spin.tooltip_text = "Font Size";
-            _size_spin.value_changed.connect(() => {
-                if (_font_ctrl_updating) return;
-                string fname = _font_entry.text.strip();
-                if (fname == "") return;
-                Gtk.TextIter s, e;
-                if (!text_buffer.get_selection_bounds(out s, out e)) return;
-                var desc = new Pango.FontDescription();
-                desc.set_family(fname);
-                desc.set_size((int)(_size_spin.value * Pango.SCALE));
-                apply_font_desc(desc);
-            });
+            track_bubble(main_window.add_bubble_icon("edit-find-symbolic", "Find & Replace (Ctrl+F)",
+                                       () => find_bar.open_find()));
 
-            var font_sep = new Separator(Orientation.VERTICAL);
-            font_sep.margin_top = 6; font_sep.margin_bottom = 6; font_sep.margin_start = 4; font_sep.margin_end = 4;
-            var title_box = new Box(Orientation.HORIZONTAL, 4);
-            _font_title_box = title_box;
-            title_box.valign = Align.CENTER;
-            title_box.append(style_chooser);
-            title_box.append(font_sep);
-            title_box.append(_font_entry);
-            title_box.append(_size_spin);
-            toolbar.set_title_widget(title_box);
+            var mode_btn = main_window.add_bubble_icon(
+                "document-edit-symbolic", "Switch View (Write / Split / Preview)", () => {});
+            mode_btn.clicked.connect(() => _cycle_md_view(mode_btn));
+            _md_mode_bubble = mode_btn;
+            track_bubble(mode_btn);
+
+            word_count_label = main_window.add_bubble_label("0 words", main_window.force_ssd);
+            track_bubble(word_count_label);
+
+            set_doc_bubbles_visible(false);
+        }
+
+        private Button? _md_mode_bubble = null;
+
+        private void _cycle_md_view(Button btn) {
+            if (_md_stack == null) return;
+            string cur = _md_stack.visible_child_name ?? "S";
+            string next = (cur == "R") ? "S" : (cur == "S") ? "V" : "R";
+            _md_stack.visible_child_name = next;
+            _refresh_md_mode_icon();
+        }
+
+        private void _refresh_md_mode_icon() {
+            if (_md_mode_bubble == null || _md_stack == null) return;
+            string m = _md_stack.visible_child_name ?? "S";
+            string icon = (m == "R") ? "document-edit-symbolic"
+                       : (m == "S") ? "view-dual-symbolic"
+                       :              "view-continuous-symbolic";
+            _md_mode_bubble.icon_name = icon;
         }
 
         private const double DOC_MM_TO_PX = 3.7795275591;
@@ -450,20 +350,6 @@ namespace Singularity.Apps {
                 settings.set_double("right-margin-mm", r);
             });
 
-            // FloatingFormatBar - parented to doc_scroll after it is created below
-            format_bar = new Singularity.Widgets.FloatingFormatBar();
-            format_bar.format_toggled.connect(on_format_toggled);
-            format_bar.color_changed.connect(on_color_changed);
-            format_bar.link_requested.connect(on_link_requested);
-            format_bar.alignment_changed.connect((just) => {
-                Gtk.TextIter s, e;
-                text_buffer.get_iter_at_mark(out s, text_buffer.get_insert());
-                text_buffer.get_iter_at_mark(out e, text_buffer.get_insert());
-                s.set_line_offset(0);
-                if (!e.ends_line()) e.forward_to_line_end();
-                text_view.set_justification(just);
-            });
-
             // Outline sidebar
             var outline_header = new Label("Outline");
             outline_header.add_css_class("write-outline-header");
@@ -497,12 +383,9 @@ namespace Singularity.Apps {
             var odt_wrap = new Box(Orientation.VERTICAL, 0);
             odt_wrap.hexpand = true;
             odt_wrap.vexpand = true;
-            odt_wrap.append(new Singularity.Widgets.ToolbarSpacer.with_height(54));
             odt_wrap.append(page_canvas);
             doc_scroll.set_child(odt_wrap);
 
-            // Parent format bar to doc_scroll to avoid scroll-on-popup
-            format_bar.set_parent(doc_scroll);
 
             // FindReplaceBar
             find_bar = new Singularity.Widgets.FindReplaceBar();
@@ -550,7 +433,6 @@ namespace Singularity.Apps {
             wp.app_icon_name = "dev.sinty.write";
             wp.title = "Write";
             wp.subtitle = "Write notes in Markdown, read PDFs alongside";
-            wp.show_close_button = false;
 
             wp.add_action(
                 "text-x-generic-symbolic",
@@ -564,9 +446,8 @@ namespace Singularity.Apps {
                     modified = false;
                     footnote_num = 0;
                     update_title();
-                    main_window.flat = false;
-                    toolbar.visible = true;
                     _layout_stack.visible_child_name = "markdown";
+                    set_doc_bubbles_visible(true);
                 }
             );
             wp.add_action(
@@ -702,13 +583,11 @@ namespace Singularity.Apps {
         }
 
         private void show_start_page() {
-            main_window.flat = true;
-            toolbar.visible = false;
-            toolbar.is_static = false;
             page_canvas.show_ruler(false);
             if (_recent_list_box != null)
                 refresh_recent_list(_recent_list_box);
             _layout_stack.visible_child_name = "start";
+            set_doc_bubbles_visible(false);
         }
 
         private void setup_text_context_menu() {
@@ -719,10 +598,6 @@ namespace Singularity.Apps {
                 menu.add_item("Cut",   "edit-cut-symbolic",   () => Signal.emit_by_name(text_view, "cut-clipboard"));
                 menu.add_item("Copy",  "edit-copy-symbolic",  () => Signal.emit_by_name(text_view, "copy-clipboard"));
                 menu.add_item("Paste", "edit-paste-symbolic", () => Signal.emit_by_name(text_view, "paste-clipboard"));
-                menu.add_separator();
-                menu.add_item("Insert Table…",    "x-office-spreadsheet-symbolic", on_insert_table);
-                menu.add_item("Insert Image…",    "insert-image-symbolic",         on_insert_image);
-                menu.add_item("Insert Footnote",  "format-indent-more-symbolic",   on_insert_footnote);
                 var rect = Gdk.Rectangle() { x = (int)x, y = (int)y, width = 1, height = 1 };
                 menu.set_pointing_to(rect);
                 menu.popup();
@@ -959,6 +834,7 @@ namespace Singularity.Apps {
                         return GLib.Source.REMOVE;
                     });
                 }
+                _refresh_md_mode_icon();
             });
             return ctrl;
         }
@@ -966,6 +842,7 @@ namespace Singularity.Apps {
         private void enter_markdown_mode() {
             setup_markdown_mode();
             _layout_stack.visible_child_name = "markdown";
+            set_doc_bubbles_visible(true);
             toolbar.set_title_widget(_md_mode_switcher);
             _md_mode_switcher.halign = Align.CENTER;
             GLib.Idle.add(() => { update_outline(); return GLib.Source.REMOVE; });
@@ -973,10 +850,8 @@ namespace Singularity.Apps {
 
         private void exit_markdown_mode() {
             _layout_stack.visible_child_name = "odt";
-            toolbar.set_title_widget(_font_title_box);
+            set_doc_bubbles_visible(true);
         }
-
-        private Gtk.Box? _font_title_box;
 
         private void on_md_source_changed() {
             mark_modified();
@@ -1016,85 +891,6 @@ namespace Singularity.Apps {
         }
 
         private void on_mark_set(Gtk.TextIter loc, Gtk.TextMark mark) {
-            if (mark != text_buffer.get_insert()) return;
-            if (_format_bar_updating) return;
-            // Don't show format bar when the find bar (or anything other than
-            // the text view / an already-visible format bar) has keyboard focus.
-            if (!text_view.has_focus && !format_bar.visible) return;
-            _format_bar_updating = true;
-            GLib.Idle.add(() => {
-                update_format_bar();
-                update_style_chooser();
-                _format_bar_updating = false;
-                return GLib.Source.REMOVE;
-            });
-        }
-
-        private void update_format_bar() {
-            Gtk.TextIter s, e;
-            if (!text_buffer.get_selection_bounds(out s, out e)) {
-                format_bar.popdown();
-                return;
-            }
-            Gdk.Rectangle iter_rect;
-            text_view.get_iter_location(s, out iter_rect);
-            Gdk.Rectangle vis;
-            text_view.get_visible_rect(out vis);
-            // Convert from buffer coords, text_view widget coords
-            int wx = iter_rect.x - vis.x;
-            int wy = iter_rect.y - vis.y;
-            // Translate from text_view widget coords, doc_scroll coords
-            double px, py;
-            text_view.translate_coordinates(doc_scroll, wx, wy, out px, out py);
-
-            _updating_sel = true;
-            format_bar.set_format_state("bold",          s.has_tag(tag_bold));
-            format_bar.set_format_state("italic",        s.has_tag(tag_italic));
-            format_bar.set_format_state("underline",     s.has_tag(tag_underline));
-            format_bar.set_format_state("strikethrough", s.has_tag(tag_strike));
-            format_bar.set_alignment(text_view.get_justification());
-            _updating_sel = false;
-
-            var rect = Gdk.Rectangle() {
-                x = (int)px, y = (int)py,
-                width = iter_rect.width > 0 ? iter_rect.width : 1,
-                height = iter_rect.height
-            };
-            format_bar.show_at_rect(rect);
-            // Return focus to text_view - GTK4 Popover.popup() grabs focus by
-            // default; the Idle ensures it runs after GTK has processed the popup.
-            GLib.Idle.add(() => { text_view.grab_focus(); return GLib.Source.REMOVE; });
-        }
-
-        private void update_style_chooser() {
-            Gtk.TextIter it;
-            text_buffer.get_iter_at_mark(out it, text_buffer.get_insert());
-            if      (it.has_tag(tag_h1))    style_chooser.set_current_style("h1");
-            else if (it.has_tag(tag_h2))    style_chooser.set_current_style("h2");
-            else if (it.has_tag(tag_h3))    style_chooser.set_current_style("h3");
-            else if (it.has_tag(tag_h4))    style_chooser.set_current_style("h4");
-            else if (it.has_tag(tag_quote)) style_chooser.set_current_style("quote");
-            else if (it.has_tag(tag_code))  style_chooser.set_current_style("code");
-            else                             style_chooser.set_current_style("body");
-            // Update font family/size controls
-            update_font_controls(it);
-        }
-
-        private void update_font_controls(Gtk.TextIter it) {
-            if (_font_entry == null || _size_spin == null) return;
-            _font_ctrl_updating = true;
-            string? family = null;
-            double size_pt = 12.0;
-            // Walk tags at cursor to find a font tag
-            var tags = it.get_tags();
-            foreach (var tag in tags) {
-                if (tag.family_set) family = tag.family;
-                if (tag.size_set) size_pt = tag.size_points;
-            }
-            if (family != null) _font_entry.text = family;
-            else _font_entry.text = "";
-            _size_spin.value = size_pt > 0 ? size_pt : 12.0;
-            _font_ctrl_updating = false;
         }
 
         private void update_word_count() {
@@ -1214,10 +1010,7 @@ namespace Singularity.Apps {
             Gtk.TextTag[] style_tags = { tag_h1, tag_h2, tag_h3, tag_h4, tag_body,
                                           tag_quote, tag_code, tag_bullet, tag_numbered };
 
-            if (style_id == "bullet" || style_id == "numbered") {
-                apply_list_style(style_id == "bullet");
-                return;
-            }
+            if (style_id == "bullet" || style_id == "numbered") return;
 
             text_buffer.begin_user_action();
             // Strip any list prefixes first
@@ -1270,98 +1063,6 @@ namespace Singularity.Apps {
                     }
                 }
             }
-        }
-
-        private void apply_list_style(bool is_bullet) {
-            Gtk.TextIter s, e;
-            bool has_sel = text_buffer.get_selection_bounds(out s, out e);
-            if (!has_sel) {
-                text_buffer.get_iter_at_mark(out s, text_buffer.get_insert());
-                e = s;
-            }
-            int start_line = s.get_line();
-            int end_line   = e.get_line();
-
-            text_buffer.begin_user_action();
-            // Strip existing list prefixes first
-            Gtk.TextIter rs = s, re = e;
-            strip_list_prefixes(rs, re);
-
-            // Re-fetch range
-            text_buffer.get_iter_at_line(out s, start_line);
-            text_buffer.get_iter_at_line(out e, end_line);
-            if (!e.ends_line()) e.forward_to_line_end();
-
-            // Remove all para style tags
-            Gtk.TextTag[] style_tags = { tag_h1, tag_h2, tag_h3, tag_h4, tag_body,
-                                          tag_quote, tag_code, tag_bullet, tag_numbered };
-            foreach (var t in style_tags) text_buffer.remove_tag(t, s, e);
-
-            // Insert prefixes per line (forward order)
-            int line_count = end_line - start_line + 1;
-            for (int i = 0; i < line_count; i++) {
-                int ln = start_line + i;
-                Gtk.TextIter ins;
-                text_buffer.get_iter_at_line(out ins, ln);
-                string prefix = is_bullet ? "• " : "%d. ".printf(i + 1);
-                text_buffer.insert(ref ins, prefix, -1);
-            }
-
-            // Re-fetch range to apply tag
-            text_buffer.get_iter_at_line(out s, start_line);
-            text_buffer.get_iter_at_line(out e, end_line);
-            if (!e.ends_line()) e.forward_to_line_end();
-            var list_tag = is_bullet ? tag_bullet : tag_numbered;
-            text_buffer.apply_tag(list_tag, s, e);
-            text_buffer.end_user_action();
-        }
-
-        private void on_style_selected(string id, string name) {
-            apply_para_style(id);
-            text_view.grab_focus();
-        }
-
-        private void on_format_toggled(string fmt, bool active) {
-            if (_updating_sel) return;
-            apply_inline(fmt);
-        }
-
-        private void on_color_changed(string kind, RGBA color) {
-            Gtk.TextIter s, e;
-            if (!text_buffer.get_selection_bounds(out s, out e)) return;
-            string hex = "#%02x%02x%02x".printf(
-                (int)(color.red * 255), (int)(color.green * 255), (int)(color.blue * 255));
-            string tname = (kind == "text" ? "fg-" : "bg-") + hex;
-            var tag = text_buffer.tag_table.lookup(tname);
-            if (tag == null) {
-                if (kind == "text") tag = text_buffer.create_tag(tname, "foreground", hex);
-                else                tag = text_buffer.create_tag(tname, "background", hex);
-            }
-            text_buffer.begin_user_action();
-            text_buffer.apply_tag(tag, s, e);
-            text_buffer.end_user_action();
-        }
-
-        private void apply_font_desc(Pango.FontDescription desc) {
-            Gtk.TextIter s, e;
-            if (!text_buffer.get_selection_bounds(out s, out e)) return;
-            
-            string family = desc.get_family();
-            int size = desc.get_size();
-            bool is_absolute = desc.get_size_is_absolute();
-            
-            string tname = "font-" + family + "-" + size.to_string();
-            var tag = text_buffer.tag_table.lookup(tname);
-            if (tag == null) {
-                tag = text_buffer.create_tag(tname);
-                tag.family = family;
-                if (is_absolute) tag.size = size;
-                else tag.size_points = (double)size / Pango.SCALE;
-            }
-            
-            text_buffer.begin_user_action();
-            text_buffer.apply_tag(tag, s, e);
-            text_buffer.end_user_action();
         }
 
         private void on_link_requested() {
@@ -1653,9 +1354,8 @@ namespace Singularity.Apps {
             current_file = null;
             text_buffer.set_text("", 0);
             modified = false;
-            main_window.flat = false;
-            toolbar.visible = true;
             _layout_stack.visible_child_name = "odt";
+            set_doc_bubbles_visible(true);
             page_canvas.show_ruler(true);
             update_title();
             update_word_count();
@@ -1753,11 +1453,13 @@ namespace Singularity.Apps {
             do_open_markdown(file);
         }
 
-        // PDF viewer
-
         private Pdf.Viewer? _pdf_viewer = null;
         private Singularity.Widgets.HoverControls? _pdf_host = null;
+        private Singularity.Widgets.ChipBar? _pdf_tabs = null;
+        private HashTable<string, GLib.File> _pdf_open = null;
         private bool _is_pdf = false;
+
+        private string _pdf_chip_id(GLib.File f) { return f.get_path(); }
 
         private void do_open_pdf(GLib.File file) {
             if (_is_markdown) {
@@ -1765,69 +1467,107 @@ namespace Singularity.Apps {
                 exit_markdown_mode();
             }
 
-            if (_pdf_viewer == null) {
-                _pdf_viewer = new Pdf.Viewer();
-                _pdf_host   = new Singularity.Widgets.HoverControls();
-                _pdf_host.set_content(_pdf_viewer);
+            if (_pdf_viewer == null) _build_pdf_mode();
 
-                var grip_btn = new Button();
-                grip_btn.add_css_class("flat");
-                grip_btn.set_size_request(28, 28);
-                grip_btn.tooltip_text = "Drag Window";
-                var grip_icon = new Image.from_icon_name("list-drag-handle-symbolic");
-                grip_icon.pixel_size = 14;
-                grip_btn.set_child(grip_icon);
-                var grip_drag = new Gtk.GestureDrag();
-                grip_drag.drag_begin.connect((x, y) => {
-                    var win = (Gtk.Window) grip_btn.get_native();
-                    if (win == null) return;
-                    var surface = win.get_surface();
-                    if (surface is Gdk.Toplevel) {
-                        ((Gdk.Toplevel) surface).begin_move(
-                            grip_drag.get_device(), 1, x, y, Gdk.CURRENT_TIME);
-                    }
-                });
-                grip_btn.add_controller(grip_drag);
-                _pdf_host.add_control(grip_btn);
-
-                var close_btn = new Button.from_icon_name("window-close-symbolic");
-                var back_btn = new Button.from_icon_name("go-previous-symbolic");
-                back_btn.tooltip_text = "Back to start";
-                back_btn.clicked.connect(() => {
-                    exit_pdf_mode();
-                    show_start_page();
-                });
-                _pdf_host.add_control(back_btn);
-
-                close_btn.tooltip_text = "Close Window";
-                close_btn.clicked.connect(() => {
-                    main_window.close();
-                });
-                _pdf_host.add_control(close_btn);
-
-                _layout_stack.add_named(_pdf_host, "pdf");
+            string id = _pdf_chip_id(file);
+            if (_pdf_open.lookup(id) == null) {
+                _pdf_open.insert(id, file);
+                _pdf_tabs.add_chip(id, file.get_basename());
             }
+
             if (!_pdf_viewer.load(file.get_path())) {
                 warning("do_open_pdf: load failed");
                 return;
             }
+            _pdf_tabs.set_active(id);
+
             _is_pdf       = true;
             current_file  = file;
             add_to_recent(file);
-            modified                = false;
-            main_window.show_close  = false;
-            main_window.flat        = true;
-            toolbar.visible         = false;
+            modified = false;
             page_canvas.show_ruler(false);
             _layout_stack.visible_child_name = "pdf";
+            // PDF mode uses _pdf_host's own bubbles, not the doc bubbles.
+            set_doc_bubbles_visible(false);
             update_title();
         }
 
+        private void _build_pdf_mode() {
+            _pdf_open   = new HashTable<string, GLib.File> (str_hash, str_equal);
+            _pdf_viewer = new Pdf.Viewer();
+
+            _pdf_tabs = new Singularity.Widgets.ChipBar();
+            _pdf_tabs.add_css_class("write-pdf-tabs");
+            _pdf_tabs.hexpand        = true;
+            _pdf_tabs.chip_activated.connect((id) => {
+                var f = _pdf_open.lookup(id);
+                if (f == null) return;
+                if (_pdf_viewer.load(f.get_path())) {
+                    _pdf_tabs.set_active(id);
+                    current_file = f;
+                    update_title();
+                }
+            });
+            _pdf_tabs.chip_closed.connect((id) => {
+                _pdf_open.remove(id);
+                _pdf_tabs.remove_chip(id);
+                if (_pdf_open.size() == 0) {
+                    exit_pdf_mode();
+                    show_start_page();
+                    return;
+                }
+                _pdf_open.foreach((_id, f) => {
+                    if (_pdf_viewer.load(f.get_path())) {
+                        _pdf_tabs.set_active(_id);
+                        current_file = f;
+                        update_title();
+                    }
+                });
+            });
+
+            var pdf_col = new Box(Orientation.VERTICAL, 0);
+            pdf_col.hexpand = true; pdf_col.vexpand = true;
+            pdf_col.append(_pdf_viewer);
+            pdf_col.append(_pdf_tabs);
+
+            _pdf_host = Singularity.Widgets.HoverControls.with_window_bubbles(main_window);
+            _pdf_host.set_content(pdf_col);
+
+            var open_btn = new Button.from_icon_name("document-open-symbolic");
+            open_btn.tooltip_text = "Open another PDF";
+            open_btn.clicked.connect(() => {
+                var fd = new FileDialog();
+                fd.title = "Open PDF";
+                var filt = new FileFilter();
+                filt.name = "PDF Documents";
+                filt.add_pattern("*.pdf");
+                var fl = new GLib.ListStore(typeof(FileFilter));
+                fl.append(filt);
+                fd.filters = fl;
+                fd.open.begin(main_window, null, (o, r) => {
+                    try {
+                        var f = fd.open.end(r);
+                        if (f != null) do_open_pdf(f);
+                    } catch (Error e) {
+                        warning("Open another PDF: %s", e.message);
+                    }
+                });
+            });
+            _pdf_host.add(open_btn);
+
+            var back_btn = new Button.from_icon_name("go-previous-symbolic");
+            back_btn.tooltip_text = "Back to start";
+            back_btn.clicked.connect(() => {
+                exit_pdf_mode();
+                show_start_page();
+            });
+            _pdf_host.add(back_btn);
+
+            _layout_stack.add_named(_pdf_host, "pdf");
+        }
+
         private void exit_pdf_mode() {
-            _is_pdf                 = false;
-            main_window.show_close  = true;
-            toolbar.visible         = true;
-            main_window.flat = false;
+            _is_pdf = false;
         }
 
         private void do_open_markdown(GLib.File file) {
@@ -2216,38 +1956,6 @@ namespace Singularity.Apps {
             string[] heading_triggers = { "#", "##", "###" };
             string[] heading_styles   = { "h1", "h2", "h3" };
 
-            if (prefix == "*" || prefix == "-") {
-                _auto_format_lock = true;
-                text_buffer.begin_user_action();
-                Gtk.TextIter s = ls, e = cursor;
-                text_buffer.delete(ref s, ref e);
-                apply_list_style(true);
-                // Advance cursor past the inserted "• " (2 Unicode chars)
-                Gtk.TextIter nc;
-                text_buffer.get_iter_at_mark(out nc, text_buffer.get_insert());
-                nc.forward_chars(2);
-                text_buffer.place_cursor(nc);
-                text_buffer.end_user_action();
-                _auto_format_lock = false;
-                return true;
-            }
-
-            if (prefix == "1.") {
-                _auto_format_lock = true;
-                text_buffer.begin_user_action();
-                Gtk.TextIter s = ls, e = cursor;
-                text_buffer.delete(ref s, ref e);
-                apply_list_style(false);
-                // Advance cursor past "1. " (3 chars)
-                Gtk.TextIter nc;
-                text_buffer.get_iter_at_mark(out nc, text_buffer.get_insert());
-                nc.forward_chars(3);
-                text_buffer.place_cursor(nc);
-                text_buffer.end_user_action();
-                _auto_format_lock = false;
-                return true;
-            }
-
             // Longest-match first for heading hashes
             for (int hi = heading_triggers.length - 1; hi >= 0; hi--) {
                 if (prefix == heading_triggers[hi]) {
@@ -2599,6 +2307,13 @@ namespace Singularity.Apps {
 }
 .write-recent-row + .write-recent-row {
     border-top: 1px solid alpha(@borders, 0.3);
+}
+
+/* PDF reader tab strip. Edge-to-edge bar at the bottom of the viewer. */
+.write-pdf-tabs {
+    padding: 6px 10px;
+    background-color: alpha(@text_color, 0.04);
+    border-top: 1px solid alpha(@text_color, 0.10);
 }
 
 """;
