@@ -166,7 +166,7 @@ namespace Singularity.Apps {
                 try {
                     Singularity.Shell.ShellService shell = GLib.Bus.get_proxy_sync(
                         GLib.BusType.SESSION, "dev.sinty.desktop", "/dev/sinty/Shell");
-                    shell.open_settings("apps");
+                    shell.open_app_settings("dev.sinty.write");
                 } catch (Error e) {
                     warning("Failed to open settings: %s", e.message);
                 }
