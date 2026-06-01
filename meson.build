@@ -3,6 +3,10 @@ project('singularity-write', ['vala', 'c'],
   meson_version: '>= 0.59.0'
 )
 
+i18n = import('i18n')
+add_project_arguments('-DGETTEXT_PACKAGE="singularity-write"', language: 'c')
+subdir('po')
+
 gnome = import('gnome')
 
 cc            = meson.get_compiler('c')

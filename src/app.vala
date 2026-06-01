@@ -351,7 +351,7 @@ namespace Singularity.Apps {
             });
 
             // Outline sidebar
-            var outline_header = new Label("Outline");
+            var outline_header = new Label(_("Outline"));
             outline_header.add_css_class("write-outline-header");
             outline_header.halign = Align.START;
             outline_header.margin_start = 12;
@@ -431,8 +431,8 @@ namespace Singularity.Apps {
         private void build_start_page() {
             var wp = new Singularity.Widgets.WelcomePage();
             wp.app_icon_name = "dev.sinty.write";
-            wp.title = "Write";
-            wp.subtitle = "Write notes in Markdown, read PDFs alongside";
+            wp.title = _("Write");
+            wp.subtitle = _("Write notes in Markdown, read PDFs alongside");
 
             wp.add_action(
                 "text-x-generic-symbolic",
@@ -466,7 +466,7 @@ namespace Singularity.Apps {
             // Recent section
             var recent_wrap = new Box(Orientation.VERTICAL, 12);
 
-            var recent_section_lbl = new Label("Recent");
+            var recent_section_lbl = new Label(_("Recent"));
             recent_section_lbl.add_css_class("title-2");
             recent_section_lbl.halign = Align.START;
 
@@ -566,7 +566,7 @@ namespace Singularity.Apps {
             }
 
             if (shown == 0) {
-                var empty = new Label("No recent documents");
+                var empty = new Label(_("No recent documents"));
                 empty.add_css_class("dim-label");
                 empty.margin_top = 16;
                 list.append(empty);
@@ -1070,7 +1070,7 @@ namespace Singularity.Apps {
             if (!text_buffer.get_selection_bounds(out s, out e)) return;
 
             var dialog = new Singularity.Widgets.AppDialog((Gtk.Application)this, true);
-            dialog.set_title("Insert Link");
+            dialog.set_title(_("Insert Link"));
             dialog.transient_for = main_window;
             dialog.set_default_size(360, 130);
 
@@ -1084,9 +1084,9 @@ namespace Singularity.Apps {
 
             var btns = new Box(Orientation.HORIZONTAL, 8);
             btns.halign = Align.END;
-            var ok = new Button.with_label("Insert");
+            var ok = new Button.with_label(_("Insert"));
             ok.add_css_class("suggested-action");
-            var cancel = new Button.with_label("Cancel");
+            var cancel = new Button.with_label(_("Cancel"));
             cancel.clicked.connect(() => dialog.close());
             ok.clicked.connect(() => {
                 if (url.text.strip() != "")
@@ -1095,7 +1095,7 @@ namespace Singularity.Apps {
             });
             btns.append(cancel);
             btns.append(ok);
-            box.append(new Label("URL:"));
+            box.append(new Label(_("URL:")));
             box.append(url);
             box.append(btns);
             dialog.content_box.append(box);
@@ -1107,7 +1107,7 @@ namespace Singularity.Apps {
 
         private void on_insert_table() {
             var dialog = new Singularity.Widgets.AppDialog((Gtk.Application)this, true);
-            dialog.set_title("Insert Table");
+            dialog.set_title(_("Insert Table"));
             dialog.transient_for = main_window;
             dialog.set_default_size(260, 155);
 
@@ -1121,14 +1121,14 @@ namespace Singularity.Apps {
             var cols_spin = new SpinButton.with_range(1, 12, 1);
             cols_spin.value = 3;
 
-            grid.attach(new Label("Rows:"),    0, 0); grid.attach(rows_spin, 1, 0);
-            grid.attach(new Label("Columns:"), 0, 1); grid.attach(cols_spin, 1, 1);
+            grid.attach(new Label(_("Rows:")),    0, 0); grid.attach(rows_spin, 1, 0);
+            grid.attach(new Label(_("Columns:")), 0, 1); grid.attach(cols_spin, 1, 1);
 
             var btns = new Box(Orientation.HORIZONTAL, 8);
             btns.halign = Align.END;
-            var cancel = new Button.with_label("Cancel");
+            var cancel = new Button.with_label(_("Cancel"));
             cancel.clicked.connect(() => dialog.close());
-            var insert = new Button.with_label("Insert");
+            var insert = new Button.with_label(_("Insert"));
             insert.add_css_class("suggested-action");
             insert.clicked.connect(() => {
                 int r = (int)rows_spin.value;
@@ -1174,7 +1174,7 @@ namespace Singularity.Apps {
 
         private void on_insert_image() {
             var fd = new FileDialog();
-            fd.title = "Insert Image";
+            fd.title = _("Insert Image");
             var filter = new FileFilter();
             filter.name = "Images";
             filter.add_mime_type("image/png");
@@ -1218,14 +1218,14 @@ namespace Singularity.Apps {
             var btn = new Button.with_label("[%d]".printf(fn));
             btn.has_frame = false;
             btn.add_css_class("write-footnote-anchor");
-            btn.tooltip_text = "Footnote %d - click to edit".printf(fn);
+            btn.tooltip_text = _("Footnote %d - click to edit").printf(fn);
 
             var pop = new Popover();
             pop.set_parent(btn);
             var fn_box = new Box(Orientation.VERTICAL, 8);
             fn_box.margin_start = 10; fn_box.margin_end = 10;
             fn_box.margin_top = 8;    fn_box.margin_bottom = 8;
-            fn_box.append(new Label("Footnote %d".printf(fn)));
+            fn_box.append(new Label(_("Footnote %d").printf(fn)));
             var fn_tv = new Gtk.TextView();
             fn_tv.wrap_mode = WrapMode.WORD_CHAR;
             fn_tv.set_size_request(280, 72);
@@ -1372,20 +1372,20 @@ namespace Singularity.Apps {
                 return;
             }
             var dlg = new Singularity.Widgets.AppDialog((Gtk.Application)this, true);
-            dlg.set_title("Close Document?");
+            dlg.set_title(_("Close Document?"));
             dlg.transient_for = main_window;
             dlg.set_default_size(320, 140);
             var box = new Box(Orientation.VERTICAL, 8);
             box.margin_start = 16; box.margin_end = 16;
             box.margin_top = 10; box.margin_bottom = 12;
-            var lbl = new Label("You have unsaved changes.\nThey will be lost if you close now.");
+            var lbl = new Label(_("You have unsaved changes.\nThey will be lost if you close now."));
             lbl.wrap = true;
             lbl.xalign = 0f;
             var btns = new Box(Orientation.HORIZONTAL, 8);
             btns.halign = Align.END;
-            var cancel_btn = new Button.with_label("Cancel");
+            var cancel_btn = new Button.with_label(_("Cancel"));
             cancel_btn.clicked.connect(() => dlg.close());
-            var close_btn2 = new Button.with_label("Close Without Saving");
+            var close_btn2 = new Button.with_label(_("Close Without Saving"));
             close_btn2.add_css_class("destructive-action");
             close_btn2.clicked.connect(() => {
                 dlg.close();
@@ -1534,10 +1534,10 @@ namespace Singularity.Apps {
             _pdf_host.set_content(pdf_col);
 
             var open_btn = new Button.from_icon_name("document-open-symbolic");
-            open_btn.tooltip_text = "Open another PDF";
+            open_btn.tooltip_text = _("Open another PDF");
             open_btn.clicked.connect(() => {
                 var fd = new FileDialog();
-                fd.title = "Open PDF";
+                fd.title = _("Open PDF");
                 var filt = new FileFilter();
                 filt.name = "PDF Documents";
                 filt.add_pattern("*.pdf");
@@ -1556,7 +1556,7 @@ namespace Singularity.Apps {
             _pdf_host.add(open_btn);
 
             var back_btn = new Button.from_icon_name("go-previous-symbolic");
-            back_btn.tooltip_text = "Back to start";
+            back_btn.tooltip_text = _("Back to start");
             back_btn.clicked.connect(() => {
                 exit_pdf_mode();
                 show_start_page();
@@ -1598,7 +1598,7 @@ namespace Singularity.Apps {
         private void on_save_as() {
             if (_is_pdf) return;
             var fd = new FileDialog();
-            fd.title = "Save Document";
+            fd.title = _("Save Document");
             fd.initial_name = _is_markdown ? "Untitled.md" : "Untitled.md";
             fd.save.begin(main_window, null, (o, r) => {
                 try {
@@ -1699,7 +1699,7 @@ namespace Singularity.Apps {
 
         private void export_save_odt_copy() {
             var fd = new FileDialog();
-            fd.title = "Save ODT Copy";
+            fd.title = _("Save ODT Copy");
             fd.initial_name = current_file != null
                 ? GLib.Path.get_basename(current_file.get_path())
                 : "Untitled.odt";
@@ -1714,7 +1714,7 @@ namespace Singularity.Apps {
 
         private void export_save_md_copy() {
             var fd = new FileDialog();
-            fd.title = "Save Markdown Copy";
+            fd.title = _("Save Markdown Copy");
             fd.initial_name = current_file != null
                 ? GLib.Path.get_basename(current_file.get_path())
                 : "Untitled.md";
@@ -1747,7 +1747,7 @@ namespace Singularity.Apps {
                 string pdf_path = GLib.Path.build_filename(tmp_dir, "export.pdf");
                 if (GLib.FileUtils.test(pdf_path, GLib.FileTest.EXISTS)) {
                     var fd = new FileDialog();
-                    fd.title = "Save PDF As";
+                    fd.title = _("Save PDF As");
                     fd.initial_name = current_file != null
                         ? GLib.Path.get_basename(current_file.get_path()).replace(".odt", ".pdf")
                         : "Untitled.pdf";
@@ -1781,7 +1781,7 @@ namespace Singularity.Apps {
                 yield proc.wait_async();
                 if (GLib.FileUtils.test(tmp_pdf, GLib.FileTest.EXISTS)) {
                     var fd = new FileDialog();
-                    fd.title = "Save PDF As";
+                    fd.title = _("Save PDF As");
                     fd.initial_name = current_file != null
                         ? GLib.Path.get_basename(current_file.get_path()).replace(".md", ".pdf")
                         : "Untitled.pdf";

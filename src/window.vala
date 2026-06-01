@@ -14,7 +14,7 @@ namespace Singularity.Apps {
 
         public WriteWindow(Gtk.Application app) {
             Object(application: app);
-            set_title("Write");
+            set_title(_("Write"));
             set_default_size(1140, 860);
         }
     }
