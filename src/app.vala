@@ -1081,6 +1081,7 @@ namespace Singularity.Apps {
             var url = new Entry();
             url.placeholder_text = "https://…";
             url.hexpand = true;
+            Singularity.Widgets.ContextMenu.attach_editable(url);
 
             var btns = new Box(Orientation.HORIZONTAL, 8);
             btns.halign = Align.END;
