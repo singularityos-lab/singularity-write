@@ -2065,8 +2065,8 @@ namespace Singularity.Apps {
                 prev.backward_char();
                 unichar pc = prev.get_char();
                 if (pc.isalnum() || pc == ')' || pc == ']' ||
-                    pc == '"'    || pc == '\u201D' ||
-                    pc == '\''   || pc == '\u2019')
+                    pc == '"'    || pc == (unichar) 0x201D ||
+                    pc == '\''   || pc == (unichar) 0x2019)
                     is_opening = false;
             }
 
