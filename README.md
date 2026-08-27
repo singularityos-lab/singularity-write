@@ -1,5 +1,9 @@
 # Singularity Write
 
+> [!IMPORTANT]
+> Report bugs and request features in the
+> [Singularity Desktop tracker](https://github.com/singularityos-lab/singularity-desktop/issues/new/choose).
+
 Markdown editor and PDF reader for the Singularity Desktop.
 
 ## Requirements
