@@ -9,6 +9,70 @@
             "theme-set": "edit"
         },
         {
+            "key": "author-name",
+            "label": "Author Name",
+            "type": "string",
+            "widget": "entry"
+        },
+        {
+            "key": "default-save-format",
+            "label": "Save New Documents As",
+            "type": "string",
+            "widget": "combo",
+            "options": [
+                {
+                    "id": "docx",
+                    "label": "Word Document (.docx)"
+                },
+                {
+                    "id": "odt",
+                    "label": "OpenDocument Text (.odt)"
+                },
+                {
+                    "id": "rtf",
+                    "label": "Rich Text Format (.rtf)"
+                }
+            ]
+        },
+        {
+            "key": "measure-metric",
+            "label": "Metric Units",
+            "type": "boolean",
+            "widget": "switch"
+        },
+        {
+            "key": "show-formatting-marks",
+            "label": "Show Formatting Marks",
+            "type": "boolean",
+            "widget": "switch"
+        },
+        {
+            "key": "spell-as-you-type",
+            "label": "Check Spelling as You Type",
+            "type": "boolean",
+            "widget": "switch"
+        },
+        {
+            "key": "grammar-as-you-type",
+            "label": "Check Grammar as You Type",
+            "type": "boolean",
+            "widget": "switch"
+        },
+        {
+            "key": "keep-versions",
+            "label": "Keep Version History",
+            "type": "boolean",
+            "widget": "switch"
+        },
+        {
+            "key": "autosave-interval",
+            "label": "Autosave Interval (seconds)",
+            "type": "int",
+            "widget": "spin",
+            "min": 0,
+            "max": 3600
+        },
+        {
             "key": "show-outline",
             "label": "Show Outline Sidebar",
             "type": "boolean",
@@ -25,6 +89,62 @@
             "label": "Smart Quotes",
             "type": "boolean",
             "widget": "switch"
+        },
+        {
+            "key": "default-template",
+            "label": "Template for New Notes",
+            "type": "string",
+            "widget": "combo",
+            "options": [
+                {
+                    "id": "blank",
+                    "label": "Blank"
+                },
+                {
+                    "id": "meeting-notes",
+                    "label": "Meeting Notes"
+                },
+                {
+                    "id": "project-brief",
+                    "label": "Project Brief"
+                },
+                {
+                    "id": "readme",
+                    "label": "README"
+                },
+                {
+                    "id": "blog-post",
+                    "label": "Blog Post"
+                },
+                {
+                    "id": "letter",
+                    "label": "Letter"
+                },
+                {
+                    "id": "report",
+                    "label": "Report"
+                },
+                {
+                    "id": "resume",
+                    "label": "Resume"
+                },
+                {
+                    "id": "journal-entry",
+                    "label": "Journal Entry"
+                },
+                {
+                    "id": "weekly-planner",
+                    "label": "Weekly Planner"
+                },
+                {
+                    "id": "recipe",
+                    "label": "Recipe"
+                },
+                {
+                    "id": "lecture-notes",
+                    "label": "Lecture Notes"
+                }
+            ]
         }
     ]
 }

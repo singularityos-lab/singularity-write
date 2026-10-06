@@ -18,6 +18,8 @@ namespace Singularity.Apps {
         Intl.bind_textdomain_codeset("singularity-write", "UTF-8");
         Intl.textdomain("singularity-write");
 
-        return new WriteApp().run(args);
+        var app = new WriteApp();
+        new WriteSearchProvider(app).export(app);
+        return app.run(args);
     }
 }

@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=dev.sinty.write
+Exec=@bindir@/singularity-write --gapplication-service

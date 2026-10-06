@@ -41,5 +41,37 @@
       <default>true</default>
       <summary>Replace straight quotes with typographic (curly) quotes while typing</summary>
     </key>
+    <key name="default-template" type="s">
+      <default>'blank'</default>
+      <summary>Template used for new Markdown notes</summary>
+    </key>
+    <key name="author-name" type="s">
+      <default>''</default>
+      <summary>Name used for comments, tracked changes and document properties</summary>
+    </key>
+    <key name="default-save-format" type="s">
+      <default>'docx'</default>
+      <summary>File format for new documents (docx, odt or rtf)</summary>
+    </key>
+    <key name="measure-metric" type="b">
+      <default>true</default>
+      <summary>Show measurements in centimetres instead of inches</summary>
+    </key>
+    <key name="show-formatting-marks" type="b">
+      <default>false</default>
+      <summary>Show paragraph marks, spaces and tabs</summary>
+    </key>
+    <key name="spell-as-you-type" type="b">
+      <default>true</default>
+      <summary>Check spelling while typing</summary>
+    </key>
+    <key name="grammar-as-you-type" type="b">
+      <default>true</default>
+      <summary>Check grammar while typing</summary>
+    </key>
+    <key name="keep-versions" type="b">
+      <default>true</default>
+      <summary>Keep a copy of the previous version every time a document is saved</summary>
+    </key>
   </schema>
 </schemalist>

@@ -2,5 +2,34 @@
 <gresources>
   <gresource prefix="/dev/sinty/write">
     <file preprocess="xml-stripblanks">ui/main.ui</file>
+    <file alias="templates/blank.md">data/templates/blank.md</file>
+    <file alias="templates/meeting-notes.md">data/templates/meeting-notes.md</file>
+    <file alias="templates/project-brief.md">data/templates/project-brief.md</file>
+    <file alias="templates/readme.md">data/templates/readme.md</file>
+    <file alias="templates/blog-post.md">data/templates/blog-post.md</file>
+    <file alias="templates/letter.md">data/templates/letter.md</file>
+    <file alias="templates/report.md">data/templates/report.md</file>
+    <file alias="templates/resume.md">data/templates/resume.md</file>
+    <file alias="templates/journal-entry.md">data/templates/journal-entry.md</file>
+    <file alias="templates/weekly-planner.md">data/templates/weekly-planner.md</file>
+    <file alias="templates/recipe.md">data/templates/recipe.md</file>
+    <file alias="templates/lecture-notes.md">data/templates/lecture-notes.md</file>
+  </gresource>
+  <gresource prefix="/dev/sinty/write/icons">
+    <file alias="scalable/actions/write-equation-symbolic.svg">data/icons/scalable/actions/write-equation-symbolic.svg</file>
+    <file alias="scalable/actions/write-format-painter-symbolic.svg">data/icons/scalable/actions/write-format-painter-symbolic.svg</file>
+    <file alias="scalable/actions/write-line-spacing-symbolic.svg">data/icons/scalable/actions/write-line-spacing-symbolic.svg</file>
+    <file alias="scalable/actions/write-marker-symbolic.svg">data/icons/scalable/actions/write-marker-symbolic.svg</file>
+    <file alias="scalable/actions/write-reader-symbolic.svg">data/icons/scalable/actions/write-reader-symbolic.svg</file>
+    <file alias="scalable/actions/write-shape-symbolic.svg">data/icons/scalable/actions/write-shape-symbolic.svg</file>
+    <file alias="scalable/actions/write-table-symbolic.svg">data/icons/scalable/actions/write-table-symbolic.svg</file>
+    <file alias="scalable/actions/write-superscript-symbolic.svg">data/icons/scalable/actions/write-superscript-symbolic.svg</file>
+    <file alias="scalable/actions/write-subscript-symbolic.svg">data/icons/scalable/actions/write-subscript-symbolic.svg</file>
+    <file alias="scalable/actions/write-text-color-symbolic.svg">data/icons/scalable/actions/write-text-color-symbolic.svg</file>
+    <file alias="scalable/actions/write-text-effects-symbolic.svg">data/icons/scalable/actions/write-text-effects-symbolic.svg</file>
+    <file alias="scalable/actions/write-translate-symbolic.svg">data/icons/scalable/actions/write-translate-symbolic.svg</file>
+    <file alias="scalable/status/write-comments.svg">data/icons/scalable/status/write-comments.svg</file>
+    <file alias="scalable/status/write-outline.svg">data/icons/scalable/status/write-outline.svg</file>
+    <file alias="scalable/status/write-track-changes.svg">data/icons/scalable/status/write-track-changes.svg</file>
   </gresource>
 </gresources>

@@ -9,158 +9,839 @@ namespace Singularity.Apps {
 
     public class WriteApp : Singularity.Application {
 
-        // UI
+        public delegate void Done();
+
         private WriteWindow main_window;
         private Singularity.Widgets.ToolBar toolbar { get { return main_window.toolbar; } }
-        private Singularity.Widgets.PageCanvas  page_canvas;
-        private Singularity.Widgets.FindReplaceBar    find_bar;
-        private bool            _font_ctrl_updating = false;
-
-        private Gtk.TextView   text_view;
-        private Gtk.TextBuffer text_buffer;
-        private Gtk.ScrolledWindow doc_scroll;
-        private Box   outline_box;
+        private Singularity.Widgets.FindReplaceBar find_bar;
+        private Box outline_box;
+        private Widget _md_outline_empty;
         private Label word_count_label;
-        private Singularity.Widgets.IconButton _export_btn;
 
-        // Layout stack (ODT vs Markdown)
         private Gtk.Stack _layout_stack;
-        private Gtk.Revealer _sidebar_revealer;
+        private WriteRichEditor _rich;
 
-        // Tags
-        private Gtk.TextTag tag_bold;
-        private Gtk.TextTag tag_italic;
-        private Gtk.TextTag tag_underline;
-        private Gtk.TextTag tag_strike;
-        private Gtk.TextTag tag_h1;
-        private Gtk.TextTag tag_h2;
-        private Gtk.TextTag tag_h3;
-        private Gtk.TextTag tag_h4;
-        private Gtk.TextTag tag_body;
-        private Gtk.TextTag tag_quote;
-        private Gtk.TextTag tag_code;
-        private Gtk.TextTag tag_link;
-        private Gtk.TextTag tag_bullet;
-        private Gtk.TextTag tag_numbered;
-
-        // State
-        private GLib.File?    current_file = null;
-        private Gtk.Box?      _recent_list_box = null;
-        private bool          modified     = false;
+        private GLib.File? current_file = null;
+        private Gtk.Box? _recent_list_box = null;
+        private Gtk.Box? _recovered_box = null;
+        private bool modified = false;
         private GLib.Settings settings;
-        private uint          autosave_id  = 0;
-        private int           footnote_num = 0;
-        private bool          _updating_sel = false;
+        private uint autosave_id = 0;
+        private string _last_search_query = "";
 
-        // Word-like UX state
-        private bool          _auto_format_lock  = false;
-        private int           _last_home_line    = -1;
-        private bool          _smart_quotes_on   = true;
-        private string        _last_search_query = "";
-        private Gtk.TextTag   tag_hr;
-
-        // Markdown mode
-        private bool          _is_markdown    = false;
-        private bool          _md_ui_built    = false;
-        private uint          _md_update_timer = 0;
-        private GtkSource.View _md_source_view;   // R page - GtkSource for syntax highlight
-        private GtkSource.View _md_source_view_s; // S page - same buffer as R
+        private bool _is_markdown = false;
+        private bool _md_ui_built = false;
+        private uint _md_update_timer = 0;
+        private GtkSource.View _md_source_view;
+        private GtkSource.View _md_source_view_s;
         private GtkSource.Buffer _md_buffer;
-        private Widget        _md_mode_switcher_widget;
-        private WebKit.WebView _md_preview_s;  // S page preview
-        private WebKit.WebView _md_preview_v;  // V page preview (separate - can't share)
-        private Gtk.Stack      _md_stack;
-        private Widget _md_mode_switcher;
+        private WebKit.WebView _md_preview_s;
+        private WebKit.WebView _md_preview_v;
+        private Gtk.Stack _md_preview_stack_s;
+        private Gtk.Stack _md_preview_stack_v;
+        private Gtk.Stack _md_stack;
 
+        private bool _pending_new_note = false;
+        private bool _pending_new_document = false;
+        private bool _pending_template_gallery = false;
+        private string? _suggested_name = null;
+        private WriteTemplateGallery? _start_gallery = null;
 
         public WriteApp() {
             Object(application_id: "dev.sinty.write",
                    flags: ApplicationFlags.HANDLES_OPEN);
+            add_main_option("new-note", 0, OptionFlags.NONE, OptionArg.NONE,
+                            _("Start a new Markdown note"), null);
+            add_main_option("new-document", 0, OptionFlags.NONE, OptionArg.NONE,
+                            _("Start a new document"), null);
+            add_main_option("new-from-template", 0, OptionFlags.NONE, OptionArg.NONE,
+                            _("Choose a template for a new document"), null);
         }
 
-        protected override void activate() {
+        protected override int handle_local_options(VariantDict options) {
+            bool from_template = options.contains("new-from-template");
+            bool new_doc = options.contains("new-document");
+            if (!options.contains("new-note") && !from_template && !new_doc) return -1;
+            try {
+                register(null);
+            } catch (Error e) {
+                return -1;
+            }
+            if (get_is_remote()) {
+                activate();
+                activate_action(from_template ? "new-from-template" : (new_doc ? "new" : "new-markdown"), null);
+                return 0;
+            }
+            _pending_new_note = !from_template && !new_doc;
+            _pending_new_document = new_doc;
+            _pending_template_gallery = from_template;
+            return -1;
+        }
+
+        private bool present_existing() {
+            var existing = get_active_window() as WriteWindow;
+            if (existing == null) return false;
+            existing.present();
+            return true;
+        }
+
+        private void build_window() {
+            Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_resource_path("/dev/sinty/write/icons");
             setup_styles();
-            settings = load_settings ();
+            settings = load_settings();
             build_ui();
             settings.changed["md-color-scheme"].connect(update_md_color_scheme);
-            show_start_page();
-            main_window.present();
             main_window.close_request.connect(on_close_request);
         }
 
-        protected override void open(GLib.File[] files, string hint) {
-            setup_styles();
-            settings = load_settings ();
-            build_ui();
-            settings.changed["md-color-scheme"].connect(update_md_color_scheme);
-            if (files.length > 0) {
-                do_open(files[0]);
+        protected override void activate() {
+            if (present_existing()) return;
+            build_window();
+            if (_pending_new_note) {
+                _pending_new_note = false;
+                new_markdown_note();
+            } else if (_pending_new_document) {
+                _pending_new_document = false;
+                new_document();
             } else {
                 show_start_page();
             }
             main_window.present();
-            main_window.close_request.connect(on_close_request);
+            if (_pending_template_gallery) {
+                _pending_template_gallery = false;
+                if (main_window.is_active) {
+                    activate_action("new-from-template", null);
+                } else {
+                    ulong handler = 0;
+                    handler = main_window.notify["is-active"].connect(() => {
+                        if (!main_window.is_active) return;
+                        main_window.disconnect(handler);
+                        activate_action("new-from-template", null);
+                    });
+                }
+            }
         }
 
-        private GLib.Settings load_settings () {
-            var src = SettingsSchemaSource.get_default ();
-            if (src != null && src.lookup ("dev.sinty.write", true) != null)
-                return new GLib.Settings ("dev.sinty.write");
+        protected override void open(GLib.File[] files, string hint) {
+            bool existing = present_existing();
+            if (!existing) build_window();
+            if (files.length > 0) {
+                do_open(files[0]);
+            } else if (!existing) {
+                show_start_page();
+            }
+            main_window.present();
+        }
+
+        public void open_document(GLib.File file) {
+            GLib.File[] files = { file };
+            open(files, "");
+        }
+
+        private GLib.Settings load_settings() {
+            var src = SettingsSchemaSource.get_default();
+            if (src != null && src.lookup("dev.sinty.write", true) != null)
+                return new GLib.Settings("dev.sinty.write");
             try {
-                string exe = GLib.FileUtils.read_link ("/proc/self/exe");
-                var data_dir = GLib.File.new_for_path (exe)
-                    .get_parent ().get_child ("data");
-                if (data_dir.get_child ("gschemas.compiled").query_exists ()) {
-                    var cs = new SettingsSchemaSource.from_directory (
-                        data_dir.get_path (), src, true);
-                    var schema = cs.lookup ("dev.sinty.write", true);
+                string exe = GLib.FileUtils.read_link("/proc/self/exe");
+                var data_dir = GLib.File.new_for_path(exe).get_parent().get_child("data");
+                if (data_dir.get_child("gschemas.compiled").query_exists()) {
+                    var cs = new SettingsSchemaSource.from_directory(data_dir.get_path(), src, true);
+                    var schema = cs.lookup("dev.sinty.write", true);
                     if (schema != null)
-                        return new GLib.Settings.full (schema, null, null);
+                        return new GLib.Settings.full(schema, null, null);
                 }
             } catch (Error e) {}
-            return new GLib.Settings ("dev.sinty.write");
+            return new GLib.Settings("dev.sinty.write");
         }
 
-        private bool on_close_request() {
-            if (autosave_id != 0) { Source.remove(autosave_id); autosave_id = 0; }
-            if (!modified) return false;
-            bool is_unsaved_new = (current_file == null);
-            var dlg = new Singularity.Widgets.ConfirmDialog((Gtk.Application)this,
-                "Save Changes?", "dialog-warning-symbolic",
-                is_unsaved_new
-                    ? "This document has never been saved. Save it first, or discard changes."
-                    : "You have unsaved changes.",
-                "Discard & Close", Singularity.Widgets.ConfirmDialog.ActionStyle.DESTRUCTIVE);
-            if (!is_unsaved_new)
-                dlg.set_secondary("Save", Singularity.Widgets.ConfirmDialog.ActionStyle.SUGGESTED);
+        private string layout() {
+            return _layout_stack != null ? (_layout_stack.visible_child_name ?? "start") : "start";
+        }
+
+        private bool in_rich() {
+            return layout() == "rich";
+        }
+
+        private bool in_markdown() {
+            return layout() == "markdown";
+        }
+
+        private bool doc_modified() {
+            if (in_rich()) return _rich.modified;
+            if (in_markdown()) return modified;
+            return false;
+        }
+
+        private void toast(string text) {
+            main_window.add_toast(new Singularity.Widgets.Toast(text));
+        }
+
+        private void guard_unsaved(owned Done next) {
+            if (!doc_modified()) {
+                next();
+                return;
+            }
+            var dlg = new Singularity.Widgets.ConfirmDialog((Gtk.Application) this,
+                _("Save Changes?"), "dialog-warning-symbolic",
+                _("The current document has unsaved changes."),
+                _("Discard"), Singularity.Widgets.ConfirmDialog.ActionStyle.DESTRUCTIVE);
+            dlg.set_secondary(_("Save"), Singularity.Widgets.ConfirmDialog.ActionStyle.SUGGESTED);
             dlg.transient_for = main_window;
             dlg.response.connect((r) => {
                 if (r == Singularity.Widgets.ConfirmDialog.Response.CANCEL) return;
-                if (r == Singularity.Widgets.ConfirmDialog.Response.SECONDARY) on_save();
+                if (r == Singularity.Widgets.ConfirmDialog.Response.SECONDARY) {
+                    save_current(() => next());
+                    return;
+                }
+                if (in_rich()) WriteFiles.clear_recovery(_rich);
+                next();
+            });
+            dlg.present();
+        }
+
+        private bool on_close_request() {
+            if (!doc_modified()) {
+                if (autosave_id != 0) {
+                    Source.remove(autosave_id);
+                    autosave_id = 0;
+                }
+                return false;
+            }
+            guard_unsaved(() => {
+                _rich.modified = false;
                 modified = false;
                 main_window.close();
             });
-            dlg.present();
             return true;
         }
 
-        // Build UI
-
         private void build_ui() {
-            main_window = new WriteWindow((Gtk.Application)this);
+            main_window = new WriteWindow((Gtk.Application) this);
+            _rich = new WriteRichEditor(main_window, this, settings);
+            _rich.title_changed.connect(update_title);
+            _rich.toast.connect((t) => toast(t));
+            _rich.state_changed.connect(sync_actions);
+            setup_doc_actions();
+            setup_menubar();
+            build_toolbar();
+            build_layout();
+            setup_keyboard();
+            setup_autosave();
+            if (Environment.get_variable("WRITE_DEBUG_SIZES") != null) GLib.Timeout.add(int.parse(Environment.get_variable("WRITE_DEBUG_SIZES")) * 1000, () => {
+                dump_sizes(main_window, 0);
+                return false;
+            });
+        }
 
-            // App menubar (used by Singularity global menu and standalone mode)
+        private void dump_sizes(Widget w, int depth) {
+            if (depth > 30) return;
+            int mn, nt, a, b;
+            w.measure(Orientation.HORIZONTAL, -1, out mn, out nt, out a, out b);
+            int mh, nh;
+            w.measure(Orientation.VERTICAL, w.get_width(), out mh, out nh, out a, out b);
+            printerr("%s%s min=%d nat=%d alloc=%dx%d vmin=%d vnat=%d vis=%s\n", string.nfill(depth * 2, ' '), w.get_type().name(), mn, nt, w.get_width(), w.get_height(), mh, nh, w.get_mapped().to_string());
+            for (var c = w.get_first_child(); c != null; c = c.get_next_sibling()) dump_sizes(c, depth + 1);
+        }
+
+        private void setup_doc_actions() {
+            var link_state = new SimpleAction.stateful("live-link", null, new Variant.string(""));
+            add_action(link_state);
+            _rich.live_changed.connect(() => {
+                link_state.set_state(new Variant.string(_rich.live != null ? _rich.live.link : ""));
+            });
+            foreach (string n in WriteActions.names()) {
+                SimpleAction act;
+                if (WriteActions.with_param(n)) act = new SimpleAction("doc-" + n, VariantType.STRING);
+                else if (WriteActions.is_double(n)) act = new SimpleAction("doc-" + n, VariantType.DOUBLE);
+                else act = new SimpleAction("doc-" + n, null);
+                string name = n;
+                act.activate.connect((v) => {
+                    if (!in_rich()) return;
+                    _rich.run(name, v);
+                });
+                add_action(act);
+            }
+            string[,] accels = {
+                { "app.doc-bold", "<Control>b" },
+                { "app.doc-italic", "<Control>i" },
+                { "app.doc-underline", "<Control>u" },
+                { "app.doc-double-underline", "<Control><Shift>d" },
+                { "app.doc-superscript", "<Control><Shift>plus" },
+                { "app.doc-subscript", "<Control>equal" },
+                { "app.doc-smallcaps", "<Control><Shift>k" },
+                { "app.doc-allcaps", "<Control><Shift>a" },
+                { "app.doc-grow-font", "<Control><Shift>greater" },
+                { "app.doc-shrink-font", "<Control><Shift>less" },
+                { "app.doc-clear-formatting", "<Control>space" },
+                { "app.doc-font-dialog", "<Control>d" },
+                { "app.doc-align::left", "<Control>l" },
+                { "app.doc-align::center", "<Control>e" },
+                { "app.doc-align::right", "<Control>r" },
+                { "app.doc-align::justify", "<Control>j" },
+                { "app.doc-line-spacing::1", "<Control>1" },
+                { "app.doc-line-spacing::1.5", "<Control>5" },
+                { "app.doc-line-spacing::2", "<Control>2" },
+                { "app.doc-indent-more", "<Control>m" },
+                { "app.doc-indent-less", "<Control><Shift>m" },
+                { "app.doc-bullets", "<Control><Shift>l" },
+                { "app.doc-style::Normal", "<Control><Shift>n" },
+                { "app.doc-style::Heading1", "<Control><Alt>1" },
+                { "app.doc-style::Heading2", "<Control><Alt>2" },
+                { "app.doc-style::Heading3", "<Control><Alt>3" },
+                { "app.doc-styles-pane", "<Control><Alt><Shift>s" },
+                { "app.doc-change-case::toggle", "<Shift>F3" },
+                { "app.doc-page-break", "<Control>Return" },
+                { "app.doc-column-break", "<Control><Shift>Return" },
+                { "app.doc-equation", "<Alt>equal" },
+                { "app.doc-footnote", "<Control><Alt>f" },
+                { "app.doc-endnote", "<Control><Alt>d" },
+                { "app.doc-new-comment", "<Control><Alt>m" },
+                { "app.doc-link", "<Control>k" },
+                { "app.doc-index-entry", "<Alt><Shift>x" },
+                { "app.doc-spelling", "F7" },
+                { "app.doc-thesaurus", "<Shift>F7" },
+                { "app.doc-word-count", "<Control><Shift>g" },
+                { "app.doc-track-changes", "<Control><Shift>e" },
+                { "app.doc-update-fields", "F9" },
+                { "app.doc-marks", "<Control><Shift>asterisk" },
+                { "app.doc-navigation", "<Control><Alt>n" },
+                { "app.doc-zoom-in", "<Control>plus" },
+                { "app.doc-zoom-out", "<Control>minus" },
+                { "app.doc-zoom::100", "<Control>0" },
+                { "app.doc-paste-text", "<Control><Shift>v" },
+                { "app.doc-paste-special", "<Control><Alt>v" },
+                { "app.doc-goto", "<Control>g" },
+                { "app.doc-format-painter", "<Control><Shift>c" },
+                { "app.doc-reveal-formatting", "<Shift>F1" },
+                { "app.doc-view::outline", "<Control><Alt>o" },
+                { "app.doc-view::print", "<Control><Alt>p" },
+                { "app.doc-view::draft", "<Control><Alt>r" },
+                { "app.doc-read-aloud", "<Control><Alt>space" }
+            };
+            for (int i = 0; i < accels.length[0]; i++) set_accels_for_action(accels[i, 0], { accels[i, 1] });
+        }
+
+        private GLib.Menu _recent_menu = new GLib.Menu();
+
+        private static GLib.Menu section(string[,] items) {
+            var m = new GLib.Menu();
+            for (int i = 0; i < items.length[0]; i++) m.append(items[i, 0], items[i, 1]);
+            return m;
+        }
+
+        private static GLib.Menu menu_of(GLib.Menu[] sections) {
+            var m = new GLib.Menu();
+            foreach (var s in sections) m.append_section(null, s);
+            return m;
+        }
+
+        private void setup_menubar() {
             var menu = new GLib.Menu();
-            var file_menu = new GLib.Menu();
-            file_menu.append("Settings", "app.settings");
-            file_menu.append("Quit", "app.quit");
-            menu.append_submenu("File", file_menu);
+
+            var f1 = section({
+                { _("New Document"), "app.new" },
+                { _("New Markdown Note"), "app.new-markdown" },
+                { _("New from Template…"), "app.new-from-template" },
+                { _("Open…"), "app.open" },
+                { _("Open from Online Account…"), "app.open-online" }
+            });
+            f1.append_submenu(_("Open Recent"), _recent_menu);
+            var export_menu = section({
+                { _("Word Document (.docx)…"), "app.export::docx" },
+                { _("OpenDocument Text (.odt)…"), "app.export::odt" },
+                { _("Rich Text Format (.rtf)…"), "app.export::rtf" },
+                { _("PDF…"), "app.export::pdf" },
+                { _("Web Page (.html)…"), "app.export::html" },
+                { _("Markdown (.md)…"), "app.export::md" },
+                { _("EPUB Book (.epub)…"), "app.export::epub" },
+                { _("Plain Text (.txt)…"), "app.export::txt" }
+            });
+            var f2 = section({
+                { _("Save"), "app.save" },
+                { _("Save As…"), "app.save-as" },
+                { _("Save to Online Account…"), "app.save-online" },
+                { _("Save as Template…"), "app.save-as-template" }
+            });
+            f2.append_submenu(_("Export"), export_menu);
+            var f3 = section({
+                { _("Version History…"), "app.doc-versions" },
+                { _("Properties…"), "app.doc-properties" },
+                { _("Restrict Editing…"), "app.doc-protect" }
+            });
+            var f4 = section({
+                { _("Page Setup…"), "app.page-setup" },
+                { _("Print…"), "app.print" },
+                { _("Share…"), "app.share" }
+            });
+            var f5 = section({
+                { _("Close Document"), "app.close-document" },
+                { _("Close Window"), "win.close" },
+                { _("Quit"), "app.quit" }
+            });
+            menu.append_submenu(_("File"), menu_of({ f1, f2, f3, f4, f5 }));
+
+            menu.append_submenu(_("Edit"), menu_of({
+                section({ { _("Undo"), "app.undo" }, { _("Redo"), "app.redo" } }),
+                section({
+                    { _("Cut"), "app.cut" },
+                    { _("Copy"), "app.copy" },
+                    { _("Paste"), "app.paste" },
+                    { _("Paste as Plain Text"), "app.doc-paste-text" },
+                    { _("Paste Special…"), "app.doc-paste-special" },
+                    { _("Select All"), "app.select-all" }
+                }),
+                section({
+                    { _("Find"), "app.find" },
+                    { _("Find and Replace"), "app.find-replace" },
+                    { _("Find Next"), "app.find-next" },
+                    { _("Find Previous"), "app.find-previous" },
+                    { _("Go To…"), "app.doc-goto" }
+                }),
+                section({ { _("Format Painter"), "app.doc-format-painter" } }),
+                section({ { _("Settings"), "app.settings" } })
+            }));
+
+            var zoom = section({
+                { _("Zoom In"), "app.doc-zoom-in" },
+                { _("Zoom Out"), "app.doc-zoom-out" },
+                { _("Actual Size"), "app.doc-zoom::100" },
+                { _("Page Width"), "app.doc-zoom::width" },
+                { _("Whole Page"), "app.doc-zoom::page" }
+            });
+            var v4 = new GLib.Menu();
+            v4.append_submenu(_("Zoom"), zoom);
+            v4.append(_("Fullscreen"), "app.fullscreen");
+            menu.append_submenu(_("View"), menu_of({
+                section({
+                    { _("Print Layout"), "app.doc-view::print" },
+                    { _("Web Layout"), "app.doc-view::web" },
+                    { _("Draft"), "app.doc-view::draft" },
+                    { _("Outline"), "app.doc-view::outline" },
+                    { _("Read Mode"), "app.doc-view::read" }
+                }),
+                section({
+                    { _("Markdown Source"), "app.md-view::R" },
+                    { _("Markdown Split"), "app.md-view::S" },
+                    { _("Markdown Preview"), "app.md-view::V" }
+                }),
+                section({
+                    { _("Navigation Pane"), "app.doc-navigation" },
+                    { _("Markdown Outline"), "app.outline" },
+                    { _("Styles Pane"), "app.doc-styles-pane" },
+                    { _("Comments Pane"), "app.doc-comments-pane" },
+                    { _("Review Pane"), "app.doc-review-pane" },
+                    { _("Ruler"), "app.doc-ruler" },
+                    { _("Formatting Marks"), "app.doc-marks" }
+                }),
+                v4
+            }));
+
+            var breaks = section({
+                { _("Page Break"), "app.doc-page-break" },
+                { _("Column Break"), "app.doc-column-break" },
+                { _("Section Break (Next Page)"), "app.doc-section-break::next" },
+                { _("Section Break (Continuous)"), "app.doc-section-break::continuous" },
+                { _("Section Break (Even Page)"), "app.doc-section-break::even" },
+                { _("Section Break (Odd Page)"), "app.doc-section-break::odd" }
+            });
+            var shapes = section({
+                { _("Rectangle"), "app.doc-shape::rect" },
+                { _("Rounded Rectangle"), "app.doc-shape::round" },
+                { _("Ellipse"), "app.doc-shape::ellipse" },
+                { _("Triangle"), "app.doc-shape::triangle" },
+                { _("Line"), "app.doc-shape::line" },
+                { _("Arrow"), "app.doc-shape::arrow" }
+            });
+            var pagenum = section({
+                { _("Top of Page…"), "app.doc-page-number::header" },
+                { _("Bottom of Page…"), "app.doc-page-number::footer" }
+            });
+            var forms = section({
+                { _("Check Box"), "app.doc-checkbox-field" },
+                { _("Text Field"), "app.doc-text-field" },
+                { _("Drop-Down List"), "app.doc-dropdown-field" }
+            });
+            var i1 = new GLib.Menu();
+            i1.append_submenu(_("Break"), breaks);
+            var i2 = section({
+                { _("Table…"), "app.doc-table-dialog" },
+                { _("Picture…"), "app.doc-picture" }
+            });
+            i2.append_submenu(_("Shape"), shapes);
+            var i2b = section({
+                { _("Text Box"), "app.doc-textbox" },
+                { _("WordArt…"), "app.doc-wordart" },
+                { _("Chart…"), "app.doc-chart" },
+                { _("Equation"), "app.doc-equation" },
+                { _("Inline Equation"), "app.doc-equation-inline" },
+                { _("Equation Gallery\u2026"), "app.doc-equation-gallery" },
+                { _("Symbol…"), "app.doc-symbol" }
+            });
+            var i3 = section({
+                { _("Link…"), "app.doc-link" },
+                { _("Bookmark…"), "app.doc-bookmark" },
+                { _("Cross-reference…"), "app.doc-cross-reference" },
+                { _("Comment"), "app.doc-new-comment" }
+            });
+            var i4 = section({
+                { _("Header"), "app.doc-header" },
+                { _("Footer"), "app.doc-footer" }
+            });
+            i4.append_submenu(_("Page Number"), pagenum);
+            var i5 = section({
+                { _("Date and Time…"), "app.doc-date-time" },
+                { _("Field…"), "app.doc-field" },
+                { _("Text from File…"), "app.doc-insert-file" },
+                { _("Drop Cap…"), "app.doc-dropcap" },
+                { _("Watermark…"), "app.doc-watermark" }
+            });
+            i5.append_submenu(_("Form Field"), forms);
+            menu.append_submenu(_("Insert"), menu_of({ i1, i2, i2b, i3, i4, i5 }));
+
+            var fcase = section({
+                { _("Sentence case."), "app.doc-change-case::sentence" },
+                { _("lowercase"), "app.doc-change-case::lower" },
+                { _("UPPERCASE"), "app.doc-change-case::upper" },
+                { _("Capitalize Each Word"), "app.doc-change-case::title" },
+                { _("tOGGLE cASE"), "app.doc-change-case::toggle" }
+            });
+            var falign = section({
+                { _("Align Left"), "app.doc-align::left" },
+                { _("Center"), "app.doc-align::center" },
+                { _("Align Right"), "app.doc-align::right" },
+                { _("Justify"), "app.doc-align::justify" }
+            });
+            var fspacing = section({
+                { "1.0", "app.doc-line-spacing::1" },
+                { "1.15", "app.doc-line-spacing::1.15" },
+                { "1.5", "app.doc-line-spacing::1.5" },
+                { "2.0", "app.doc-line-spacing::2" },
+                { _("Add Space Before Paragraph"), "app.doc-space-before" },
+                { _("Add Space After Paragraph"), "app.doc-space-after" }
+            });
+            var fstyles = section({
+                { _("Normal"), "app.doc-style::Normal" },
+                { _("Title"), "app.doc-style::Title" },
+                { _("Subtitle"), "app.doc-style::Subtitle" },
+                { _("Heading 1"), "app.doc-style::Heading1" },
+                { _("Heading 2"), "app.doc-style::Heading2" },
+                { _("Heading 3"), "app.doc-style::Heading3" },
+                { _("Quote"), "app.doc-style::Quote" },
+                { _("No Spacing"), "app.doc-style::NoSpacing" }
+            });
+            fstyles.append_section(null, section({
+                { _("Styles Pane"), "app.doc-styles-pane" },
+                { _("New Style…"), "app.doc-new-style" },
+                { _("Modify Style…"), "app.doc-modify-style" },
+                { _("Import Styles…"), "app.doc-manage-styles" }
+            }));
+            var fsets = section({
+                { _("Classic"), "app.doc-style-set::classic" },
+                { _("Modern"), "app.doc-style-set::modern" },
+                { _("Elegant"), "app.doc-style-set::elegant" },
+                { _("Minimal"), "app.doc-style-set::minimal" },
+                { _("Technical"), "app.doc-style-set::technical" }
+            });
+            var forient = section({
+                { _("Portrait"), "app.doc-orientation::portrait" },
+                { _("Landscape"), "app.doc-orientation::landscape" }
+            });
+            var fm1 = section({
+                { _("Font…"), "app.doc-font-dialog" },
+                { _("Paragraph…"), "app.doc-paragraph-dialog" }
+            });
+            var fm2 = section({
+                { _("Bold"), "app.doc-bold" },
+                { _("Italic"), "app.doc-italic" },
+                { _("Underline"), "app.doc-underline" },
+                { _("Double Underline"), "app.doc-double-underline" },
+                { _("Strikethrough"), "app.doc-strike" },
+                { _("Double Strikethrough"), "app.doc-dstrike" },
+                { _("Superscript"), "app.doc-superscript" },
+                { _("Subscript"), "app.doc-subscript" },
+                { _("Small Caps"), "app.doc-smallcaps" },
+                { _("All Caps"), "app.doc-allcaps" },
+                { _("Grow Font"), "app.doc-grow-font" },
+                { _("Shrink Font"), "app.doc-shrink-font" }
+            });
+            fm2.append_submenu(_("Change Case"), fcase);
+            var fm3 = section({
+                { _("Text Color…"), "app.doc-text-color-menu" },
+                { _("Highlight Color…"), "app.doc-highlight-menu" },
+                { _("Clear Formatting"), "app.doc-clear-formatting" }
+            });
+            var fm4 = new GLib.Menu();
+            fm4.append_submenu(_("Alignment"), falign);
+            fm4.append_submenu(_("Line and Paragraph Spacing"), fspacing);
+            fm4.append(_("Increase Indent"), "app.doc-indent-more");
+            fm4.append(_("Decrease Indent"), "app.doc-indent-less");
+            fm4.append(_("Bullets"), "app.doc-bullets");
+            fm4.append(_("Numbering"), "app.doc-numbering");
+            fm4.append(_("Lists…"), "app.doc-multilevel");
+            fm4.append(_("Restart Numbering"), "app.doc-restart-numbering");
+            var fm5 = new GLib.Menu();
+            fm5.append_submenu(_("Styles"), fstyles);
+            fm5.append_submenu(_("Style Set"), fsets);
+            var fm6 = section({
+                { _("Columns…"), "app.doc-columns" },
+                { _("Borders and Shading…"), "app.doc-borders" },
+                { _("Page Color…"), "app.doc-page-color" },
+                { _("Page Borders…"), "app.doc-page-borders" }
+            });
+            fm6.append_submenu(_("Orientation"), forient);
+            fm6.append(_("Reveal Formatting"), "app.doc-reveal-formatting");
+            menu.append_submenu(_("Format"), menu_of({ fm1, fm2, fm3, fm4, fm5, fm6 }));
+
+            var tstyles = section({
+                { _("Table Grid"), "app.doc-table-style::TableGrid" },
+                { _("Plain Table"), "app.doc-table-style::PlainTable" },
+                { _("Grid Table Light"), "app.doc-table-style::GridTableLight" },
+                { _("Grid Table Accent"), "app.doc-table-style::GridTableAccent" }
+            });
+            var t3 = section({
+                { _("Sort…"), "app.doc-table-sort" },
+                { _("Formula…"), "app.doc-table-formula" },
+                { _("Table Properties…"), "app.doc-table-properties" }
+            });
+            t3.append_submenu(_("Table Style"), tstyles);
+            menu.append_submenu(_("Table"), menu_of({
+                section({ { _("Insert Table…"), "app.doc-table-dialog" } }),
+                section({
+                    { _("Insert Row Above"), "app.doc-table-op::row-above" },
+                    { _("Insert Row Below"), "app.doc-table-op::row-below" },
+                    { _("Insert Column Left"), "app.doc-table-op::col-left" },
+                    { _("Insert Column Right"), "app.doc-table-op::col-right" },
+                    { _("Delete Row"), "app.doc-table-op::delete-row" },
+                    { _("Delete Column"), "app.doc-table-op::delete-col" },
+                    { _("Delete Table"), "app.doc-table-op::delete-table" }
+                }),
+                section({
+                    { _("Merge With Right Cell"), "app.doc-table-op::merge-right" },
+                    { _("Merge With Cell Below"), "app.doc-table-op::merge-down" },
+                    { _("Split Cell"), "app.doc-table-op::split" },
+                    { _("Distribute Columns Evenly"), "app.doc-table-op::distribute" },
+                    { _("Repeat Header Row"), "app.doc-table-op::header-row" }
+                }),
+                t3,
+                section({
+                    { _("Convert Text to Table…"), "app.doc-text-to-table" },
+                    { _("Convert Table to Text"), "app.doc-table-to-text" }
+                })
+            }));
+
+            var bibstyles = section({
+                { "APA", "app.doc-bib-style::APA" },
+                { "MLA", "app.doc-bib-style::MLA" },
+                { "Chicago", "app.doc-bib-style::Chicago" },
+                { "IEEE", "app.doc-bib-style::IEEE" },
+                { "Harvard", "app.doc-bib-style::Harvard" }
+            });
+            var r3 = section({
+                { _("Insert Citation…"), "app.doc-citation" },
+                { _("Manage Sources…"), "app.doc-sources" },
+                { _("Bibliography"), "app.doc-bibliography" }
+            });
+            r3.append_submenu(_("Citation Style"), bibstyles);
+            menu.append_submenu(_("References"), menu_of({
+                section({
+                    { _("Table of Contents"), "app.doc-toc" },
+                    { _("Update Table of Contents"), "app.doc-update-toc" }
+                }),
+                section({
+                    { _("Footnote"), "app.doc-footnote" },
+                    { _("Endnote"), "app.doc-endnote" }
+                }),
+                r3,
+                section({
+                    { _("Insert Caption…"), "app.doc-caption" },
+                    { _("Table of Figures"), "app.doc-tof" },
+                    { _("Cross-reference…"), "app.doc-cross-reference" }
+                }),
+                section({
+                    { _("Mark Index Entry…"), "app.doc-index-entry" },
+                    { _("Insert Index"), "app.doc-index" }
+                }),
+                section({ { _("Update Fields"), "app.doc-update-fields" } })
+            }));
+
+            var markup = section({
+                { _("All Markup"), "app.doc-markup::all" },
+                { _("Simple Markup"), "app.doc-markup::simple" },
+                { _("No Markup"), "app.doc-markup::none" },
+                { _("Original"), "app.doc-markup::original" }
+            });
+            var rv3 = section({ { _("Track Changes"), "app.doc-track-changes" } });
+            rv3.append_submenu(_("Show Markup"), markup);
+            rv3.append_section(null, section({
+                { _("Accept"), "app.doc-accept" },
+                { _("Reject"), "app.doc-reject" },
+                { _("Accept All Changes"), "app.doc-accept-all" },
+                { _("Reject All Changes"), "app.doc-reject-all" },
+                { _("Next Change"), "app.doc-next-change" },
+                { _("Previous Change"), "app.doc-prev-change" },
+                { _("Review Pane"), "app.doc-review-pane" }
+            }));
+            menu.append_submenu(_("Review"), menu_of({
+                section({
+                    { _("Spelling and Grammar"), "app.doc-spelling" },
+                    { _("Thesaurus"), "app.doc-thesaurus" },
+                    { _("Word Count"), "app.doc-word-count" },
+                    { _("Language…"), "app.doc-language" },
+                    { _("Hyphenation"), "app.doc-hyphenation" },
+                    { _("Read Aloud"), "app.doc-read-aloud" },
+                    { _("Dictate"), "app.doc-dictate" },
+                    { _("Translate\u2026"), "app.doc-translate" },
+                    { _("Check Accessibility"), "app.doc-accessibility" }
+                }),
+                section({
+                    { _("New Comment"), "app.doc-new-comment" },
+                    { _("Reply to Comment"), "app.doc-comment-reply" },
+                    { _("Resolve Comment"), "app.doc-resolve-comment" },
+                    { _("Delete Comment"), "app.doc-delete-comment" },
+                    { _("Next Comment"), "app.doc-next-comment" },
+                    { _("Previous Comment"), "app.doc-prev-comment" },
+                    { _("Comments Pane"), "app.doc-comments-pane" }
+                }),
+                rv3,
+                section({
+                    { _("Edit Together\u2026"), "app.doc-live-share" },
+                    { _("Compare…"), "app.doc-compare" },
+                    { _("Combine…"), "app.doc-combine" }
+                }),
+                section({
+                    { _("Restrict Editing…"), "app.doc-protect" },
+                    { _("Line Numbers"), "app.doc-line-numbers" }
+                })
+            }));
+
+            var finish = section({
+                { _("Edit Individual Documents"), "app.doc-merge-finish::document" },
+                { _("Save as PDF Files…"), "app.doc-merge-finish::pdf" },
+                { _("Print Documents…"), "app.doc-merge-finish::print" }
+            });
+            var m2 = section({
+                { _("Preview Results"), "app.doc-merge-preview" },
+                { _("Next Record"), "app.doc-merge-next" },
+                { _("Previous Record"), "app.doc-merge-prev" }
+            });
+            m2.append_submenu(_("Finish and Merge"), finish);
+            menu.append_submenu(_("Mailings"), menu_of({
+                section({
+                    { _("Select Recipients…"), "app.doc-merge-recipients" },
+                    { _("Insert Merge Field…"), "app.doc-merge-field" }
+                }),
+                m2,
+                section({
+                    { _("Envelopes…"), "app.doc-envelopes" },
+                    { _("Labels…"), "app.doc-labels" }
+                })
+            }));
+
+            menu.append_submenu(_("Tools"), menu_of({
+                section({
+                    { _("Record Macro"), "app.doc-macro-record" },
+                    { _("Macros…"), "app.doc-macros" },
+                    { _("New Script\u2026"), "app.doc-script-new" }
+                }),
+                section({
+                    { _("AutoCorrect Options…"), "app.doc-autocorrect" },
+                    { _("Update Fields"), "app.doc-update-fields" }
+                })
+            }));
+
             set_menubar(menu);
 
-            // App-level actions
-            var act_quit = new SimpleAction("quit", null);
-            act_quit.activate.connect(() => quit());
-            add_action(act_quit);
+            add_simple("new", () => guard_unsaved(() => new_document()));
+            add_simple("new-markdown", () => guard_unsaved(() => new_markdown_note()));
+            add_simple("new-from-template", () => WriteTemplateDialogs.choose(this, main_window, (t) => start_from_template(t)));
+            add_simple("save-as-template", () => on_save_as_template());
+            add_simple("open", () => on_open());
+            var open_recent = new SimpleAction("open-recent", VariantType.STRING);
+            open_recent.activate.connect((v) => do_open(GLib.File.new_for_uri(v.get_string())));
+            add_action(open_recent);
+            add_simple("save", () => save_current(null));
+            add_simple("save-as", () => on_save_as(null));
+            add_simple("open-online", () => CloudActions.open.begin(main_window, (f) => do_open(f)));
+            add_simple("save-online", () => on_save_online());
+            var export_act = new SimpleAction("export", VariantType.STRING);
+            export_act.activate.connect((v) => export_as(Write.FileFormat.from_extension("x." + v.get_string())));
+            add_action(export_act);
+            add_simple("print", () => on_print());
+            add_simple("page-setup", () => {
+                if (in_rich()) _rich.run("page-setup", null);
+                else Singularity.Print.page_setup.begin(main_window);
+            });
+            Singularity.Share.add_action(this, main_window, () => {
+                GLib.File? f = in_rich() ? _rich.file : current_file;
+                return f != null ? new Singularity.ShareContent.for_files({ f }) : null;
+            });
+            add_simple("insert-equation", () => {
+                if (in_rich()) _rich.run("equation", null);
+                else insert_md_equation.begin();
+            });
+            add_simple("close-document", () => on_close_document());
+            add_simple("undo", () => {
+                if (in_rich()) _rich.run("undo", null);
+                else if (_md_buffer != null && _md_buffer.can_undo) _md_buffer.undo();
+            });
+            add_simple("redo", () => {
+                if (in_rich()) _rich.run("redo", null);
+                else if (_md_buffer != null && _md_buffer.can_redo) _md_buffer.redo();
+            });
+            add_simple("cut", () => {
+                if (in_rich()) _rich.run("cut", null);
+                else Signal.emit_by_name(active_view(), "cut-clipboard");
+            });
+            add_simple("copy", () => {
+                if (in_rich()) _rich.run("copy", null);
+                else Signal.emit_by_name(active_view(), "copy-clipboard");
+            });
+            add_simple("paste", () => {
+                if (in_rich()) _rich.run("paste", null);
+                else Signal.emit_by_name(active_view(), "paste-clipboard");
+            });
+            add_simple("select-all", () => {
+                if (in_rich()) {
+                    _rich.run("select-all", null);
+                    return;
+                }
+                active_view().select_all(true);
+                active_view().grab_focus();
+            });
+            add_simple("find", () => {
+                if (in_rich()) _rich.run("find", null);
+                else find_bar.open_find();
+            });
+            add_simple("find-replace", () => {
+                if (in_rich()) _rich.run("find-replace", null);
+                else find_bar.open_replace();
+            });
+            add_simple("find-next", () => {
+                if (in_rich()) _rich.run("find", null);
+                else if (_last_search_query != "") do_find(_last_search_query, true);
+                else find_bar.open_find();
+            });
+            add_simple("find-previous", () => {
+                if (in_rich()) _rich.run("find", null);
+                else if (_last_search_query != "") do_find(_last_search_query, false);
+                else find_bar.open_find();
+            });
+            var md_view = new SimpleAction.stateful("md-view", VariantType.STRING, new Variant.string("S"));
+            md_view.activate.connect((v) => {
+                if (_md_stack != null) _md_stack.visible_child_name = v.get_string();
+            });
+            add_action(md_view);
+            var outline = new SimpleAction.stateful("outline", null, new Variant.boolean(false));
+            outline.activate.connect(() => toggle_sidebar());
+            add_action(outline);
+            var fullscreen_act = new SimpleAction.stateful("fullscreen", null, new Variant.boolean(false));
+            fullscreen_act.activate.connect(() => {
+                if (main_window.fullscreened) main_window.unfullscreen();
+                else main_window.fullscreen();
+            });
+            add_action(fullscreen_act);
+
             var act_settings = new SimpleAction("settings", null);
             act_settings.activate.connect(() => {
                 try {
@@ -173,298 +854,366 @@ namespace Singularity.Apps {
             });
             add_action(act_settings);
 
-            setup_text_buffer();
-            build_toolbar();
-            build_layout();
-            setup_keyboard();
-            setup_autosave();
+            set_accels_for_action("app.new", {"<Control>n"});
+            set_accels_for_action("app.new-from-template", {"<Control><Shift>t"});
+            set_accels_for_action("app.open", {"<Control>o"});
+            set_accels_for_action("app.save", {"<Control>s"});
+            set_accels_for_action("app.save-as", {"<Control><Shift>s", "F12"});
+            set_accels_for_action("app.print", {"<Control>p"});
+            set_accels_for_action("app.undo", {"<Control>z"});
+            set_accels_for_action("app.redo", {"<Control>y", "<Control><Shift>z"});
+            set_accels_for_action("app.cut", {"<Control>x"});
+            set_accels_for_action("app.copy", {"<Control>c"});
+            set_accels_for_action("app.paste", {"<Control>v"});
+            set_accels_for_action("app.select-all", {"<Control>a"});
+            set_accels_for_action("app.find", {"<Control>f"});
+            set_accels_for_action("app.find-replace", {"<Control>h"});
+            set_accels_for_action("app.find-next", {"F3"});
+            set_accels_for_action("app.fullscreen", {"F11"});
+            set_accels_for_action("app.settings", {"<Control>comma"});
+            set_accels_for_action("win.close", {"<Control>w"});
+
+            main_window.notify["fullscreened"].connect(sync_actions);
+            settings.changed["recent-files"].connect(refresh_recent_menu);
+            refresh_recent_menu();
         }
 
-        private void setup_text_buffer() {
-            text_buffer = new Gtk.TextBuffer(null);
-            text_buffer.enable_undo = true;
+        private void add_simple(string name, owned GLib.Func<SimpleAction> cb) {
+            var act = new SimpleAction(name, null);
+            act.activate.connect(() => cb(act));
+            add_action(act);
+        }
 
-            tag_bold      = text_buffer.create_tag("bold",      "weight",      700);
-            tag_italic    = text_buffer.create_tag("italic",    "style",       Pango.Style.ITALIC);
-            tag_underline = text_buffer.create_tag("underline", "underline",   Pango.Underline.SINGLE);
-            tag_strike    = text_buffer.create_tag("strikethrough", "strikethrough", true);
+        private void refresh_recent_menu() {
+            _recent_menu.remove_all();
+            int shown = 0;
+            foreach (string uri in settings.get_strv("recent-files")) {
+                if (shown >= 10) break;
+                if (uri.down().has_suffix(".pdf")) continue;
+                var f = GLib.File.new_for_uri(uri);
+                if (!f.query_exists()) continue;
+                shown++;
+                var item = new GLib.MenuItem(f.get_basename(), null);
+                item.set_action_and_target_value("app.open-recent", new Variant.string(uri));
+                _recent_menu.append_item(item);
+            }
+            if (shown == 0) _recent_menu.append(_("No Recent Documents"), null);
+        }
 
-            tag_h1 = text_buffer.create_tag("h1",
-                "weight", 700, "scale", 2.0,
-                "pixels-above-lines", 14, "pixels-below-lines", 6);
-            tag_h2 = text_buffer.create_tag("h2",
-                "weight", 700, "scale", 1.6,
-                "pixels-above-lines", 10, "pixels-below-lines", 4);
-            tag_h3 = text_buffer.create_tag("h3",
-                "weight", 700, "scale", 1.3,
-                "pixels-above-lines", 8, "pixels-below-lines", 3);
-            tag_h4 = text_buffer.create_tag("h4",
-                "weight", 600, "scale", 1.1,
-                "pixels-above-lines", 6, "pixels-below-lines", 2);
-            tag_body = text_buffer.create_tag("body",
-                "scale", 1.0, "weight", 400);
-            tag_quote = text_buffer.create_tag("quote",
-                "style", Pango.Style.ITALIC,
-                "left-margin", 32,
-                "foreground", "#999999");
-            tag_code = text_buffer.create_tag("code",
-                "family", "Monospace",
-                "scale", 0.92);
-            tag_link = text_buffer.create_tag("link",
-                "foreground", "#5599ff",
-                "underline", Pango.Underline.SINGLE);
-            tag_bullet = text_buffer.create_tag("bullet",
-                "left-margin", 28, "indent", -14,
-                "pixels-above-lines", 1, "pixels-below-lines", 1);
-            tag_numbered = text_buffer.create_tag("numbered",
-                "left-margin", 32, "indent", -18,
-                "pixels-above-lines", 1, "pixels-below-lines", 1);
-            tag_hr = text_buffer.create_tag("hr",
-                "foreground", "#999999", "scale", 0.7,
-                "justification", Gtk.Justification.CENTER,
-                "pixels-above-lines", 6, "pixels-below-lines", 6);
+        private void set_enabled(string name, bool enabled) {
+            var act = lookup_action(name) as SimpleAction;
+            if (act != null) act.set_enabled(enabled);
+        }
 
-            _smart_quotes_on = settings.get_boolean("smart-quotes");
+        private void sync_actions() {
+            if (_layout_stack == null || main_window == null) return;
+            bool doc = layout() != "start";
+            bool md = in_markdown();
+            bool rich = in_rich();
+            bool editable = rich ? _rich.editable() : (md && _md_stack != null && _md_stack.visible_child_name != "V");
+            foreach (string name in new string[] { "save", "save-as", "save-online", "print", "close-document", "find",
+                                                   "find-replace", "find-next", "find-previous", "export", "page-setup",
+                                                   "save-as-template", "select-all", "copy" })
+                set_enabled(name, doc);
+            set_enabled("share", doc && (rich ? _rich.file != null : current_file != null));
+            if (rich) {
+                set_enabled("undo", _rich.ed.undo.can_undo);
+                set_enabled("redo", _rich.ed.undo.can_redo);
+                set_enabled("cut", editable);
+                set_enabled("paste", editable);
+            } else {
+                set_enabled("undo", md && _md_buffer != null && _md_buffer.can_undo);
+                set_enabled("redo", md && _md_buffer != null && _md_buffer.can_redo);
+                set_enabled("cut", editable && _md_buffer != null && _md_buffer.has_selection);
+                set_enabled("paste", editable);
+            }
+            set_enabled("md-view", md);
+            set_enabled("outline", md);
+            foreach (string n in WriteActions.names()) {
+                var a = lookup_action("doc-" + n) as SimpleAction;
+                if (a != null) a.set_enabled(rich);
+            }
+            var md_view = lookup_action("md-view") as SimpleAction;
+            if (md_view != null && _md_stack != null)
+                md_view.set_state(new Variant.string(_md_stack.visible_child_name ?? "S"));
+            var outline = lookup_action("outline") as SimpleAction;
+            if (outline != null) outline.set_state(new Variant.boolean(_rich.sidebar_shown()));
+            var fullscreen_act = lookup_action("fullscreen") as SimpleAction;
+            if (fullscreen_act != null) fullscreen_act.set_state(new Variant.boolean(main_window.fullscreened));
+            if (_context_switcher != null) _context_switcher.visible = rich && _rich.fbar.visible;
+            if (_md_switcher != null) _md_switcher.visible = md;
+        }
 
-            text_buffer.changed.connect(on_buffer_changed);
-            text_buffer.mark_set.connect(on_mark_set);
-            // apply_tag / remove_tag do NOT emit changed - connect separately so
-            // heading style changes update the outline without a full text edit.
-            text_buffer.apply_tag.connect((tag, start, end) => {
-                GLib.Idle.add(() => { update_outline(); return GLib.Source.REMOVE; });
-            });
-            text_buffer.remove_tag.connect((tag, start, end) => {
-                GLib.Idle.add(() => { update_outline(); return GLib.Source.REMOVE; });
+        private void watch_buffer(Gtk.TextBuffer buf) {
+            buf.notify["can-undo"].connect(sync_actions);
+            buf.notify["can-redo"].connect(sync_actions);
+            buf.notify["has-selection"].connect(sync_actions);
+        }
+
+        private void new_markdown_note() {
+            var preset = WriteTemplates.get_default().find(settings.get_string("default-template"));
+            if (preset != null && preset.id != WriteTemplates.BLANK) {
+                new_markdown_from_template(preset);
+                return;
+            }
+            _is_markdown = true;
+            enter_markdown_mode();
+            _md_buffer.set_text("", -1);
+            current_file = null;
+            _suggested_name = null;
+            modified = false;
+            update_title();
+            _layout_stack.visible_child_name = "markdown";
+            set_doc_bubbles_visible(true);
+        }
+
+        private void start_from_template(WriteTemplate t) {
+            guard_unsaved(() => new_document_from_template(t));
+        }
+
+        private void new_document_from_template(WriteTemplate t) {
+            string body = WriteTemplates.get_default().instantiate(t);
+            Write.Document d;
+            try {
+                d = Write.Formats.load(body.data, Write.FileFormat.MARKDOWN);
+            } catch (Error e) {
+                toast(e.message);
+                return;
+            }
+            if (t.id != WriteTemplates.BLANK) d.meta.title = t.name;
+            show_rich_document(d, null, default_format());
+            _rich.modified = false;
+            update_title();
+        }
+
+        private void new_markdown_from_template(WriteTemplate t) {
+            string body = WriteTemplates.get_default().instantiate(t);
+            _is_markdown = true;
+            enter_markdown_mode();
+            _md_buffer.begin_irreversible_action();
+            _md_buffer.set_text(body, -1);
+            _md_buffer.end_irreversible_action();
+            Gtk.TextIter start;
+            _md_buffer.get_start_iter(out start);
+            _md_buffer.place_cursor(start);
+            current_file = null;
+            _suggested_name = t.id == WriteTemplates.BLANK ? null : t.name;
+            modified = false;
+            update_title();
+            _layout_stack.visible_child_name = "markdown";
+            set_doc_bubbles_visible(true);
+            GLib.Idle.add(() => { update_md_preview(); return GLib.Source.REMOVE; });
+        }
+
+        private void on_save_as_template() {
+            if (in_rich()) {
+                on_save_as(null, true);
+                return;
+            }
+            if (!_is_markdown || !_md_ui_built) return;
+            string suggested = current_file != null
+                ? WriteTemplates.display_name(current_file.get_basename())
+                : (_suggested_name ?? "");
+            WriteTemplateDialogs.save_as(this, main_window, _md_buffer.text, suggested, (t) => {
+                toast(_("Saved as template “%s”").printf(t.name));
             });
         }
 
-        // Tracked so they can be hidden on the welcome page and re-shown when a document opens.
         private GLib.List<Widget> _doc_bubbles = new GLib.List<Widget>();
+        private Button? _outline_bubble = null;
+        private Singularity.Widgets.BubbleSwitcher? _context_switcher = null;
+        private Singularity.Widgets.BubbleSwitcher? _md_switcher = null;
+        private Singularity.Widgets.SearchBubble? _search_bubble = null;
+        private bool _md_switch_sync = false;
 
         private void track_bubble(Widget w) {
             _doc_bubbles.append(w);
         }
 
         public void set_doc_bubbles_visible(bool visible) {
-            foreach (var w in _doc_bubbles) {
-                w.visible = visible;
+            foreach (var w in _doc_bubbles) w.visible = visible;
+            if (visible) {
+                if (_md_switcher != null) _md_switcher.visible = in_markdown();
+                if (_context_switcher != null) _context_switcher.visible = in_rich() && _rich.fbar.visible;
+                if (word_count_label != null) word_count_label.visible = in_markdown();
             }
         }
 
+        private void toggle_sidebar() {
+            if (layout() == "start") return;
+            _rich.show_left(!_rich.sidebar_shown());
+        }
+
         private void build_toolbar() {
-            // Drag bubble is auto-added by the Window's bubble bar to the far left.
             track_bubble(main_window.add_bubble_icon(
-                "go-previous-symbolic", "Back to Start (close document)",
+                "go-previous-symbolic", _("Back to Start (close document)"),
                 () => on_close_document()));
 
-            track_bubble(main_window.add_bubble_icon("sidebar-show-symbolic", "Toggle Outline", () => {
-                _sidebar_revealer.reveal_child = !_sidebar_revealer.reveal_child;
-            }));
+            _outline_bubble = main_window.add_bubble_icon("sidebar-show-symbolic", _("Sidebar"), () => toggle_sidebar());
+            track_bubble(_outline_bubble);
 
-            track_bubble(main_window.add_bubble_icon("document-new-symbolic",  "New (Ctrl+N)",   () => on_new()));
-            track_bubble(main_window.add_bubble_icon("document-open-symbolic", "Open (Ctrl+O)",  () => on_open()));
+            _rich.fbar.attach(main_window);
+            _context_switcher = _rich.fbar.tabs;
+            main_window.set_bubble_priority(_context_switcher, 10);
+            track_bubble(_context_switcher);
 
-            var save_btn = main_window.add_bubble_icon(
-                "document-save-symbolic", "Save (Ctrl+S)", () => {});
-            save_btn.clicked.connect(() => {
-                var menu = new Singularity.Widgets.ContextMenu(save_btn);
-                menu.add_item("Save",     "document-save-symbolic",   () => on_save());
-                menu.add_item("Save As…", "document-save-as-symbolic", () => on_save_as());
-                menu.add_separator();
-                menu.add_item("Export / Print…", "document-send-symbolic", () => on_export());
-                menu.closed.connect(() => { menu.unparent(); });
-                menu.popup();
+            _md_switcher = new Singularity.Widgets.BubbleSwitcher();
+            _md_switcher.add_option("R", _("Source"));
+            _md_switcher.add_option("S", _("Split"));
+            _md_switcher.add_option("V", _("Preview"));
+            _md_switcher.set_active("S");
+            _md_switcher.selected.connect((n) => {
+                if (_md_switch_sync || _md_stack == null) return;
+                _md_stack.visible_child_name = n;
             });
+            main_window.add_bubble_widget(_md_switcher);
+            main_window.set_bubble_priority(_md_switcher, 10);
+            track_bubble(_md_switcher);
+
+            _search_bubble = main_window.add_bubble_search(_("Search Document"), (t) => on_search_changed(t));
+            _search_bubble.entry.activate.connect(() => {
+                if (in_rich()) _rich.nav.search_next();
+                else if (_search_bubble.text != "") do_find(_search_bubble.text, true);
+            });
+            track_bubble(_search_bubble);
+            _rich.nav.focus_search_requested.connect((seed) => focus_search_bubble(seed));
+            _rich.nav.clear_search_requested.connect(() => _search_bubble.clear());
+
+            var save_btn = main_window.add_bubble_icon("document-save-symbolic", _("Save (Ctrl+S)"), () => {});
+            save_btn.clicked.connect(() => WriteRibbon.popup_menu(save_btn, (menu) => {
+                menu.add_item(_("Save"), "document-save-symbolic", () => save_current(null));
+                menu.add_item(_("Save As\u2026"), "document-save-as-symbolic", () => on_save_as(null));
+                menu.add_item(_("Save to Online Account\u2026"), "folder-remote-symbolic", () => on_save_online());
+                menu.add_item(_("Save as Template\u2026"), "document-new-symbolic", () => on_save_as_template());
+                menu.add_separator();
+                var ex = menu.add_submenu(_("Export"), "document-send-symbolic");
+                ex.add_css_class("write-menu");
+                string[,] formats = {
+                    { _("Word Document (.docx)\u2026"), "docx" },
+                    { _("OpenDocument Text (.odt)\u2026"), "odt" },
+                    { _("Rich Text Format (.rtf)\u2026"), "rtf" },
+                    { _("PDF\u2026"), "pdf" },
+                    { _("Web Page (.html)\u2026"), "html" },
+                    { _("Markdown (.md)\u2026"), "md" },
+                    { _("EPUB Book (.epub)\u2026"), "epub" },
+                    { _("Plain Text (.txt)\u2026"), "txt" }
+                };
+                for (int i = 0; i < formats.length[0]; i++) {
+                    string ext = formats[i, 1];
+                    ex.add_item(formats[i, 0], null, () => activate_action("export", new Variant.string(ext)));
+                }
+                menu.add_item(_("Print\u2026"), "printer-symbolic", () => on_print());
+                menu.add_item(_("Page Setup\u2026"), "document-page-setup-symbolic", () => activate_action("page-setup", null));
+                if (in_rich()) {
+                    menu.add_separator();
+                    menu.add_item(_("Version History\u2026"), "document-open-recent-symbolic", () => _rich.run("versions", null));
+                    menu.add_item(_("Properties\u2026"), "document-properties-symbolic", () => _rich.run("properties", null));
+                }
+            }));
             track_bubble(save_btn);
 
-            track_bubble(main_window.add_bubble_icon("edit-find-symbolic", "Find & Replace (Ctrl+F)",
-                                       () => find_bar.open_find()));
+            var share_btn = main_window.add_bubble_icon("singularity-share-symbolic", _("Share"),
+                                       () => activate_action("share", null));
+            lookup_action("share").bind_property("enabled", share_btn, "sensitive", BindingFlags.SYNC_CREATE);
+            track_bubble(share_btn);
 
-            var mode_btn = main_window.add_bubble_icon(
-                "document-edit-symbolic", "Switch View (Write / Split / Preview)", () => {});
-            mode_btn.clicked.connect(() => _cycle_md_view(mode_btn));
-            _md_mode_bubble = mode_btn;
-            track_bubble(mode_btn);
-
-            word_count_label = main_window.add_bubble_label("0 words", main_window.force_ssd);
+            word_count_label = main_window.add_bubble_label(_("0 words"), main_window.force_ssd);
             track_bubble(word_count_label);
 
             set_doc_bubbles_visible(false);
         }
 
-        private Button? _md_mode_bubble = null;
-
-        private void _cycle_md_view(Button btn) {
-            if (_md_stack == null) return;
-            string cur = _md_stack.visible_child_name ?? "S";
-            string next = (cur == "R") ? "S" : (cur == "S") ? "V" : "R";
-            _md_stack.visible_child_name = next;
-            _refresh_md_mode_icon();
+        private void focus_search_bubble(string seed) {
+            if (_search_bubble == null) return;
+            if (seed != "") _search_bubble.text = seed;
+            _search_bubble.grab_focus_entry();
         }
 
-        private void _refresh_md_mode_icon() {
-            if (_md_mode_bubble == null || _md_stack == null) return;
-            string m = _md_stack.visible_child_name ?? "S";
-            string icon = (m == "R") ? "document-edit-symbolic"
-                       : (m == "S") ? "view-dual-symbolic"
-                       :              "view-continuous-symbolic";
-            _md_mode_bubble.icon_name = icon;
-        }
-
-        private const double DOC_MM_TO_PX = 3.7795275591;
-
-        private void apply_doc_margins(double left_mm, double right_mm) {
-            int left_px  = (int)(left_mm  * DOC_MM_TO_PX);
-            int right_px = (int)(right_mm * DOC_MM_TO_PX);
-            int tb_px    = (int)(25.4 * DOC_MM_TO_PX); // 1 inch top/bottom
-            text_view.left_margin   = left_px;
-            text_view.right_margin  = right_px;
-            text_view.top_margin    = tb_px;
-            text_view.bottom_margin = tb_px;
+        private void on_search_changed(string t) {
+            if (in_rich()) {
+                _rich.nav.search_for(t.strip());
+                return;
+            }
+            if (in_markdown() && t != "") {
+                _last_search_query = t;
+                do_find(t, true);
+            }
         }
 
         private void build_layout() {
             var root = main_window.root;
             var content_hbox = main_window.content_hbox;
 
-            // TextView
-            text_view = new Gtk.TextView.with_buffer(text_buffer);
-            text_view.wrap_mode     = WrapMode.WORD_CHAR;
-            text_view.hexpand       = true;
-            text_view.vexpand       = true;
-            text_view.pixels_above_lines = 2;
-            text_view.pixels_below_lines = 2;
-            text_view.add_css_class("write-doc-text");
-            setup_text_context_menu();
-
-            // PageCanvas
-            page_canvas = new Singularity.Widgets.PageCanvas();
-            page_canvas.left_margin_mm  = settings.get_double("left-margin-mm");
-            page_canvas.right_margin_mm = settings.get_double("right-margin-mm");
-            page_canvas.set_content_widget(text_view);
-            apply_doc_margins(page_canvas.left_margin_mm, page_canvas.right_margin_mm);
-            
-            page_canvas.margins_changed.connect((l, r) => {
-                apply_doc_margins(l, r);
-                settings.set_double("left-margin-mm",  l);
-                settings.set_double("right-margin-mm", r);
-            });
-
-            // Outline sidebar
-            var outline_header = new Label(_("Outline"));
-            outline_header.add_css_class("write-outline-header");
-            outline_header.halign = Align.START;
-            outline_header.margin_start = 12;
-            outline_header.margin_top   = 10;
-            outline_header.margin_bottom = 6;
-
-            outline_box = new Box(Orientation.VERTICAL, 0);
+            outline_box = new Box(Orientation.VERTICAL, 2);
             outline_box.add_css_class("write-outline-list");
-            var outline_scroll = new ScrolledWindow();
-            outline_scroll.vexpand = true;
-            outline_scroll.set_policy(PolicyType.NEVER, PolicyType.AUTOMATIC);
-            outline_scroll.set_child(outline_box);
+            var md_empty = WriteNavigationPane.section_page("write-outline", _("Outline"), _("This note has no headings yet. Lines that start with # appear here."));
+            md_empty.add_action("write-outline", _("Add Heading"), _("Turn the current line into a heading"), () => add_md_heading());
+            md_empty.visible = true;
+            _md_outline_empty = md_empty;
+            outline_box.append(_md_outline_empty);
+            _rich.nav.add_page("markdown", outline_box, null);
+            main_window.set_sidebar(_rich.nav);
+            main_window.set_sidebar_visible(false);
 
-            var left_panel = new Box(Orientation.VERTICAL, 0);
-            left_panel.add_css_class("write-sidebar");
-            left_panel.set_size_request(180, -1);
-            left_panel.append(outline_header);
-            left_panel.append(outline_scroll);
-
-            _sidebar_revealer = new Revealer();
-            _sidebar_revealer.transition_type = RevealerTransitionType.SLIDE_RIGHT;
-            _sidebar_revealer.set_child(left_panel);
-            _sidebar_revealer.reveal_child = false;  // hidden by default - toggle via toolbar
-
-            doc_scroll = new ScrolledWindow();
-            doc_scroll.hexpand = true;
-            doc_scroll.vexpand = true;
-            // Wrap page_canvas in a box with a spacer so content starts below the floating toolbar
-            var odt_wrap = new Box(Orientation.VERTICAL, 0);
-            odt_wrap.hexpand = true;
-            odt_wrap.vexpand = true;
-            odt_wrap.append(page_canvas);
-            doc_scroll.set_child(odt_wrap);
-
-
-            // FindReplaceBar
             find_bar = new Singularity.Widgets.FindReplaceBar();
-            find_bar.find_next.connect((q) => { _last_search_query = q; do_find_forward(q); });
-            find_bar.find_prev.connect((q) => { _last_search_query = q; do_find_backward(q); });
+            find_bar.find_next.connect((q) => { _last_search_query = q; do_find(q, true); });
+            find_bar.find_prev.connect((q) => { _last_search_query = q; do_find(q, false); });
             find_bar.replace_one.connect(do_replace_one);
             find_bar.replace_all.connect(do_replace_all);
             find_bar.closed.connect(() => {
                 find_bar.reveal_child = false;
-                text_view.grab_focus();
+                if (_md_ui_built) active_view().grab_focus();
             });
 
-            // Layout stack: "odt" = doc_scroll only (sidebar moved to shared wrapper below)
             _layout_stack = new Gtk.Stack();
             _layout_stack.hexpand = true;
             _layout_stack.vexpand = true;
             _layout_stack.transition_type = Gtk.StackTransitionType.CROSSFADE;
             _layout_stack.transition_duration = 150;
-            _layout_stack.add_named(doc_scroll, "odt");
-            build_start_page(); // adds "start" to _layout_stack
-
-            // Shared sidebar+content wrapper - sidebar visible in both ODT and MD modes
-            var _sidebar_sep = new Separator(Orientation.VERTICAL);
-            _sidebar_sep.visible = false;
-            _sidebar_revealer.notify["child-revealed"].connect(() => {
-                _sidebar_sep.visible = _sidebar_revealer.child_revealed;
-            });
-            _sidebar_revealer.notify["reveal-child"].connect(() => {
-                if (_sidebar_revealer.reveal_child) _sidebar_sep.visible = true;
+            _layout_stack.add_named(_rich, "rich");
+            build_start_page();
+            _layout_stack.notify["visible-child-name"].connect(() => {
+                _rich.nav.set_markdown(in_markdown());
+                if (layout() == "start") main_window.set_sidebar_visible(false);
+                sync_actions();
             });
 
-            content_hbox.append(_sidebar_revealer);
-            content_hbox.append(_sidebar_sep);
             content_hbox.append(_layout_stack);
 
-            root.append(content_hbox);
             root.append(find_bar);
 
             main_window.set_content(root);
         }
 
-
         private void build_start_page() {
             var wp = new Singularity.Widgets.WelcomePage();
             wp.app_icon_name = "dev.sinty.write";
             wp.title = _("Write");
-            wp.subtitle = _("Write notes in Markdown, read PDFs alongside");
+            wp.subtitle = _("Documents, letters, reports and Markdown notes");
 
             wp.add_action(
-                "text-x-generic-symbolic",
-                "New Markdown Note",
-                "Plain-text format with live\npreview and R/S/V editing modes.",
-                () => {
-                    _is_markdown = true;
-                    enter_markdown_mode();
-                    _md_buffer.set_text("", -1);
-                    current_file = null;
-                    modified = false;
-                    footnote_num = 0;
-                    update_title();
-                    _layout_stack.visible_child_name = "markdown";
-                    set_doc_bubbles_visible(true);
-                }
+                "x-office-document",
+                _("New Document"),
+                _("A page-based document with styles,\ntables, pictures and references."),
+                () => activate_action("new", null)
             );
             wp.add_action(
-                "document-open-symbolic",
-                "Open Markdown",
-                "Open an existing .md or .markdown\nfile from disk.",
-                () => { on_open_with_kind("md"); }
+                "text-x-generic",
+                _("New Markdown Note"),
+                _("Plain-text format with Source,\nSplit and Preview modes."),
+                () => activate_action("new-markdown", null)
             );
             wp.add_action(
-                "document-open-symbolic",
-                "Open PDF",
-                "Read a PDF in the paginated\nviewer with floating controls.",
-                () => { on_open_with_kind("pdf"); }
+                "folder-open",
+                _("Open"),
+                _("Word, OpenDocument, RTF, EPUB,\nweb pages and Markdown."),
+                () => on_open()
             );
 
-            // Recent section
             var recent_wrap = new Box(Orientation.VERTICAL, 12);
+
+            _recovered_box = new Box(Orientation.VERTICAL, 12);
+            recent_wrap.append(_recovered_box);
 
             var recent_section_lbl = new Label(_("Recent"));
             recent_section_lbl.add_css_class("title-2");
@@ -477,9 +1226,88 @@ namespace Singularity.Apps {
 
             recent_wrap.append(recent_section_lbl);
             recent_wrap.append(recent_list);
-            wp.set_extra_widget(recent_wrap);
+            wp.add_action("x-office-document-template", _("Browse Templates"),
+                          _("Meeting notes, reports, letters and more"),
+                          () => activate_action("new-from-template", null));
+            _start_gallery = new WriteTemplateGallery(132, 4, 8);
+            _start_gallery.chosen.connect((t) => start_from_template(t));
+            _start_gallery.rename_requested.connect((t) => WriteTemplateDialogs.rename(this, main_window, t));
+            _start_gallery.delete_requested.connect((t) => WriteTemplateDialogs.confirm_delete(this, main_window, t));
+            var start_extra = new Box(Orientation.VERTICAL, 24);
+            start_extra.append(_start_gallery);
+            start_extra.append(recent_wrap);
+            Singularity.Widgets.apply_titlebar_inset(start_extra);
+            wp.set_extra_widget(start_extra);
 
             _layout_stack.add_named(wp, "start");
+        }
+
+        private void refresh_recovered() {
+            if (_recovered_box == null) return;
+            Widget? w;
+            while ((w = _recovered_box.get_first_child()) != null) _recovered_box.remove(w);
+            var list = WriteFiles.recovered(in_rich() ? _rich.recovery_id : null);
+            if (list.size == 0) return;
+            var lbl = new Label(_("Recovered"));
+            lbl.add_css_class("title-2");
+            lbl.halign = Align.START;
+            _recovered_box.append(lbl);
+            var box = new Box(Orientation.VERTICAL, 2);
+            box.add_css_class("write-recent-list");
+            foreach (var rec in list) {
+                var row = new Box(Orientation.HORIZONTAL, 12);
+                row.add_css_class("write-recent-row");
+                row.margin_top = 6;
+                row.margin_bottom = 6;
+                row.margin_start = 12;
+                row.margin_end = 12;
+                var icon = new Image.from_icon_name("x-office-document-symbolic");
+                icon.pixel_size = 20;
+                var text = new Box(Orientation.VERTICAL, 2);
+                text.hexpand = true;
+                string origin = rec.origin != "" ? GLib.File.new_for_uri(rec.origin).get_basename() : _("Unsaved document");
+                var name = new Label(origin);
+                name.halign = Align.START;
+                name.ellipsize = Pango.EllipsizeMode.END;
+                var when = new Label(_("Autosaved %s").printf(rec.when));
+                when.halign = Align.START;
+                when.add_css_class("dim-label");
+                when.add_css_class("caption");
+                text.append(name);
+                text.append(when);
+                var open_btn = new Button.with_label(_("Open"));
+                open_btn.valign = Align.CENTER;
+                var r = rec;
+                open_btn.clicked.connect(() => open_recovered(r));
+                var discard = new Button.with_label(_("Discard"));
+                discard.valign = Align.CENTER;
+                discard.clicked.connect(() => {
+                    WriteFiles.discard_recovered(r);
+                    refresh_recovered();
+                });
+                row.append(icon);
+                row.append(text);
+                row.append(discard);
+                row.append(open_btn);
+                box.append(row);
+            }
+            _recovered_box.append(box);
+        }
+
+        private void open_recovered(WriteFiles.Recovered rec) {
+            try {
+                Write.FileFormat fmt;
+                var d = WriteFiles.load(GLib.File.new_for_path(rec.path), out fmt);
+                GLib.File? origin = rec.origin != "" ? GLib.File.new_for_uri(rec.origin) : null;
+                var ofmt = Write.FileFormat.from_extension("x." + rec.ext);
+                show_rich_document(d, origin, ofmt.writable() && ofmt.rich() ? ofmt : default_format());
+                WriteFiles.discard_recovered(rec);
+                _rich.modified = true;
+                update_title();
+                toast(_("Recovered document opened. Save it to keep the changes."));
+            } catch (Error e) {
+                toast(e.message);
+            }
         }
 
         private void add_to_recent(GLib.File file) {
@@ -494,10 +1322,10 @@ namespace Singularity.Apps {
                 count++;
             }
             settings.set_strv("recent-files", updated);
+            Gtk.RecentManager.get_default().add_item(uri);
         }
 
         private void refresh_recent_list(Box list) {
-            // Clear
             while (list.get_first_child() != null)
                 list.remove(list.get_first_child());
 
@@ -505,6 +1333,7 @@ namespace Singularity.Apps {
             int shown = 0;
             foreach (string uri in uris) {
                 if (shown >= 10) break;
+                if (uri.down().has_suffix(".pdf")) continue;
                 var f = GLib.File.new_for_uri(uri);
                 if (!f.query_exists()) continue;
                 shown++;
@@ -512,13 +1341,12 @@ namespace Singularity.Apps {
                 string path = f.get_path() ?? uri;
                 string fname = f.get_basename() ?? uri;
                 string fpath = path.replace(GLib.Environment.get_home_dir(), "~");
-                bool is_md = uri.has_suffix(".md") || uri.has_suffix(".markdown");
+                string lu = uri.down();
+                bool is_md = lu.has_suffix(".md") || lu.has_suffix(".markdown") || lu.has_suffix(".txt");
 
-                // Get file modification time
                 string date_str = "";
                 try {
-                    var info = f.query_info(GLib.FileAttribute.TIME_MODIFIED,
-                                            GLib.FileQueryInfoFlags.NONE);
+                    var info = f.query_info(GLib.FileAttribute.TIME_MODIFIED, GLib.FileQueryInfoFlags.NONE);
                     var mtime = info.get_modification_date_time();
                     if (mtime != null) date_str = format_recent_date(mtime);
                 } catch {}
@@ -531,8 +1359,7 @@ namespace Singularity.Apps {
                 row_box.margin_top = 8; row_box.margin_bottom = 8;
                 row_box.margin_start = 12; row_box.margin_end = 12;
 
-                var row_icon = new Image.from_icon_name(
-                    is_md ? "text-x-generic-symbolic" : "x-office-document-symbolic");
+                var row_icon = new Image.from_icon_name(is_md ? "text-x-generic-symbolic" : "x-office-document-symbolic");
                 row_icon.pixel_size = 20;
 
                 var row_text = new Box(Orientation.VERTICAL, 2);
@@ -576,172 +1403,80 @@ namespace Singularity.Apps {
         private string format_recent_date(GLib.DateTime dt) {
             var now = new GLib.DateTime.now_local();
             var diff = now.difference(dt);
-            if (diff < GLib.TimeSpan.DAY)        return "Today";
-            if (diff < 2 * GLib.TimeSpan.DAY)    return "Yesterday";
-            if (diff < 7 * GLib.TimeSpan.DAY)    return dt.format("%A");
+            if (diff < GLib.TimeSpan.DAY) return _("Today");
+            if (diff < 2 * GLib.TimeSpan.DAY) return _("Yesterday");
+            if (diff < 7 * GLib.TimeSpan.DAY) return dt.format("%A");
             return dt.format("%d %b %Y");
         }
 
         private void show_start_page() {
-            page_canvas.show_ruler(false);
-            if (_recent_list_box != null)
-                refresh_recent_list(_recent_list_box);
+            if (_start_gallery != null) _start_gallery.refresh();
+            if (_recent_list_box != null) refresh_recent_list(_recent_list_box);
             _layout_stack.visible_child_name = "start";
+            refresh_recovered();
+            toolbar.set_title_widget(null);
+            toolbar.set_title(_("Write"));
+            main_window.title = _("Write");
             set_doc_bubbles_visible(false);
-        }
-
-        private void setup_text_context_menu() {
-            var click = new GestureClick();
-            click.button = 3;
-            click.pressed.connect((n, x, y) => {
-                var menu = new Singularity.Widgets.ContextMenu(text_view);
-                menu.add_item("Cut",   "edit-cut-symbolic",   () => Signal.emit_by_name(text_view, "cut-clipboard"));
-                menu.add_item("Copy",  "edit-copy-symbolic",  () => Signal.emit_by_name(text_view, "copy-clipboard"));
-                menu.add_item("Paste", "edit-paste-symbolic", () => Signal.emit_by_name(text_view, "paste-clipboard"));
-                var rect = Gdk.Rectangle() { x = (int)x, y = (int)y, width = 1, height = 1 };
-                menu.set_pointing_to(rect);
-                menu.popup();
-            });
-            text_view.add_controller(click);
+            main_window.set_sidebar_visible(false);
+            sync_actions();
         }
 
         private void setup_keyboard() {
-            // Global shortcuts on main_window
             var kc = new EventControllerKey();
             kc.key_pressed.connect((kv, kc2, state) => {
-                bool ctrl  = (state & ModifierType.CONTROL_MASK) != 0;
-                bool shift = (state & ModifierType.SHIFT_MASK)   != 0;
-                if (ctrl) {
-                    // Ctrl+Shift+Space, non-breaking space
-                    if (kv == Key.space && shift) {
-                        Gtk.TextIter cur;
-                        text_buffer.get_iter_at_mark(out cur, text_buffer.get_insert());
-                        text_buffer.begin_user_action();
-                        text_buffer.insert(ref cur, "\u00A0", -1);
-                        text_buffer.end_user_action();
-                        return true;
-                    }
-                    switch (kv) {
-                        case Key.z:
-                            if (shift) text_buffer.redo(); else text_buffer.undo();
-                            return true;
-                        case Key.y: text_buffer.redo(); return true;
-                        case Key.Return: {
-                            Gtk.TextIter cur;
-                            text_buffer.get_iter_at_mark(out cur, text_buffer.get_insert());
-                            text_buffer.begin_user_action();
-                            text_buffer.insert(ref cur, "\f", -1);
-                            text_buffer.end_user_action();
-                            return true;
-                        }
-                        case Key.b: apply_inline("bold");          return true;
-                        case Key.i: apply_inline("italic");        return true;
-                        case Key.u: apply_inline("underline");     return true;
-                        case Key.a:
-                            text_view.select_all(true);
-                            text_view.grab_focus();
-                            return true;
-                        case Key.s: on_save();                     return true;
-                        case Key.n: on_new();                      return true;
-                        case Key.o: on_open();                     return true;
-                        case Key.f: find_bar.open_find();          return true;
-                        case Key.h: find_bar.open_replace();       return true;
-                    }
-                }
-                if (kv == Key.F3) {
-                    if (shift) {
-                        if (_last_search_query != "") do_find_backward(_last_search_query);
-                        else find_bar.open_find();
-                    } else {
-                        if (_last_search_query != "") do_find_forward(_last_search_query);
-                        else find_bar.open_find();
-                    }
+                bool shift = (state & ModifierType.SHIFT_MASK) != 0;
+                if (in_markdown() && kv == Key.F3 && shift) {
+                    if (_last_search_query != "") do_find(_last_search_query, false);
+                    else find_bar.open_find();
                     return true;
                 }
-                if (kv == Key.Escape) {
-                    if (find_bar.reveal_child) {
-                        find_bar.reveal_child = false;
-                        text_view.grab_focus();
-                        return true;
-                    }
+                if (kv == Key.Escape && find_bar.reveal_child) {
+                    find_bar.reveal_child = false;
+                    if (_md_ui_built) active_view().grab_focus();
+                    return true;
                 }
                 return false;
             });
-            ((Gtk.Widget)main_window).add_controller(kc);
-
-            // Text-view capture handler (intercepts before GTK default)
-            var tv_kc = new EventControllerKey();
-            tv_kc.propagation_phase = PropagationPhase.CAPTURE;
-            tv_kc.key_pressed.connect((kv, kc2, state) => {
-                bool ctrl  = (state & ModifierType.CONTROL_MASK) != 0;
-                bool shift = (state & ModifierType.SHIFT_MASK)   != 0;
-
-                // Ctrl+Backspace / Ctrl+Delete – word deletion
-                if (ctrl && kv == Key.BackSpace) { delete_word_backward(); return true; }
-                if (ctrl && kv == Key.Delete)    { delete_word_forward();  return true; }
-
-                // Smart Home
-                if (!ctrl && kv == Key.Home) return handle_smart_home(shift);
-
-                // Smart Enter
-                if (!ctrl && !shift && (kv == Key.Return || kv == Key.KP_Enter))
-                    return handle_enter();
-
-                // Auto-format trigger on Space
-                if (!ctrl && !shift && kv == Key.space)
-                    if (try_auto_format_line()) return true;
-
-                // Smart quotes
-                if (!ctrl && !shift && _smart_quotes_on) {
-                    if (kv == Key.quotedbl)   return handle_smart_quote('"');
-                    if (kv == Key.apostrophe) return handle_smart_quote('\'');
-                }
-
-                // Reset smart-home tracker on any non-Home key
-                if (kv != Key.Home) _last_home_line = -1;
-                return false;
-            });
-            text_view.add_controller(tv_kc);
+            ((Gtk.Widget) main_window).add_controller(kc);
         }
 
         private void setup_autosave() {
             int interval = settings.get_int("autosave-interval");
-            if (interval > 0) {
-                autosave_id = GLib.Timeout.add_seconds(interval, () => {
-                    if (modified && current_file != null) do_save(current_file);
-                    return GLib.Source.CONTINUE;
-                });
-            }
+            if (interval <= 0) interval = 0;
+            autosave_id = GLib.Timeout.add_seconds(interval > 0 ? interval : 60, () => {
+                if (in_rich() && _rich.modified) {
+                    WriteFiles.write_recovery(_rich);
+                    if (interval > 0 && _rich.file != null && _rich.format.writable() && _rich.format.rich()) rich_write(_rich.file, _rich.format, false);
+                } else if (in_markdown() && modified && current_file != null && interval > 0) {
+                    md_write(current_file);
+                }
+                return GLib.Source.CONTINUE;
+            });
         }
-
-        // Markdown mode setup
 
         private void setup_markdown_mode() {
             if (_md_ui_built) return;
             _md_ui_built = true;
 
-            // GtkSource buffer with Markdown language for syntax highlighting
             var lm = GtkSource.LanguageManager.get_default();
             var lang = lm.get_language("markdown");
             _md_buffer = new GtkSource.Buffer.with_language(lang);
             _md_buffer.changed.connect(on_md_source_changed);
+            watch_buffer(_md_buffer);
             update_md_color_scheme();
 
-            _md_source_view   = make_md_sourceview();   // R page view
-            _md_source_view_s = make_md_sourceview();   // S page view (same buffer)
+            _md_source_view   = make_md_sourceview();
+            _md_source_view_s = make_md_sourceview();
             var s_view        = _md_source_view_s;
 
-            // Two separate WebViews - GTK4 widgets can only have one parent
             _md_preview_s = make_md_webview();
             _md_preview_v = make_md_webview();
 
-            // R page: full-bleed editor (internal top padding pushes content
-            // below the floating toolbar, no external spacer).
             var r_scroll = new ScrolledWindow();
             r_scroll.hexpand = true; r_scroll.vexpand = true;
             r_scroll.set_child(_md_source_view);
 
-            // S page: paned source | preview
             var md_paned = new Gtk.Paned(Orientation.HORIZONTAL);
             md_paned.hexpand = true; md_paned.vexpand = true;
             md_paned.wide_handle = false;
@@ -749,31 +1484,44 @@ namespace Singularity.Apps {
             s_source_scroll.hexpand = true; s_source_scroll.vexpand = true;
             s_source_scroll.set_child(s_view);
             md_paned.set_start_child(s_source_scroll);
-            md_paned.set_end_child(_md_preview_s);
+            _md_preview_stack_s = make_md_preview_stack(_md_preview_s);
+            md_paned.set_end_child(_md_preview_stack_s);
             md_paned.position = 480;
 
-            // V page: preview only
             var v_box = new Box(Orientation.VERTICAL, 0);
             v_box.hexpand = true; v_box.vexpand = true;
-            v_box.append(_md_preview_v);
+            _md_preview_stack_v = make_md_preview_stack(_md_preview_v);
+            v_box.append(_md_preview_stack_v);
 
-            // Mode stack
             _md_stack = new Gtk.Stack();
             _md_stack.transition_type = Gtk.StackTransitionType.NONE;
             _md_stack.hexpand = true; _md_stack.vexpand = true;
-            _md_stack.add_titled(r_scroll,  "R", "R");
-            _md_stack.add_titled(md_paned,  "S", "S");
-            _md_stack.add_titled(v_box,     "V", "V");
+            _md_stack.add_titled(r_scroll,  "R", _("Source"));
+            _md_stack.add_titled(md_paned,  "S", _("Split"));
+            _md_stack.add_titled(v_box,     "V", _("Preview"));
             _md_stack.visible_child_name = "S";
+            _md_stack.add_css_class("write-markdown");
 
-            // Compact inline R/S/V switcher (fits toolbar height without bloat)
-            _md_mode_switcher = build_md_switcher();
+            build_md_switcher();
 
             _layout_stack.add_named(_md_stack, "markdown");
         }
 
         private GtkSource.View make_md_sourceview() {
             return new Singularity.Widgets.SourceView(_md_buffer);
+        }
+
+        private Gtk.Stack make_md_preview_stack(WebKit.WebView view) {
+            var empty = new Singularity.Widgets.StatusPage();
+            empty.icon_name = "dev.sinty.write";
+            empty.title = _("Nothing to Preview");
+            empty.description = _("Start writing to see the formatted document here.");
+            var stack = new Gtk.Stack();
+            stack.hexpand = true; stack.vexpand = true;
+            stack.add_named(view, "preview");
+            stack.add_named(empty, "empty");
+            stack.visible_child_name = "empty";
+            return stack;
         }
 
         private WebKit.WebView make_md_webview() {
@@ -788,7 +1536,6 @@ namespace Singularity.Apps {
             string scheme_id = settings != null ? settings.get_string("md-color-scheme") : "classic";
             if (scheme_id == "") scheme_id = "classic";
 
-            // Check if it's a TerminalThemes-style theme (auto, onedark, etc.)
             var sinty_theme = Singularity.Core.TerminalThemes.get_by_id(scheme_id);
             if (sinty_theme != null) {
                 var xml = Singularity.Core.TerminalThemes.get_source_scheme_xml(sinty_theme.id);
@@ -808,7 +1555,7 @@ namespace Singularity.Apps {
                         sm.force_rescan();
                         var scheme = sm.get_scheme(scheme_id);
                         if (scheme != null) {
-                            _md_buffer.style_scheme = scheme;
+                            set_md_scheme(scheme);
                             return;
                         }
                     } catch (Error e) {
@@ -820,12 +1567,39 @@ namespace Singularity.Apps {
             var sm = GtkSource.StyleSchemeManager.get_default();
             var scheme = sm.get_scheme(scheme_id);
             if (scheme == null) scheme = sm.get_scheme("classic");
-            if (scheme != null) _md_buffer.style_scheme = scheme;
+            if (scheme != null) set_md_scheme(scheme);
         }
 
-        private Widget build_md_switcher() {
-            var ctrl = new Singularity.Widgets.SegmentedControl(_md_stack);
+        private void set_md_scheme(GtkSource.StyleScheme scheme) {
+            string accent = Singularity.Style.StyleManager.get_default().accent_hex;
+            string id = "write-accent-" + scheme.id;
+            string dir = GLib.Path.build_filename(
+                GLib.Environment.get_user_cache_dir(), "singularity", "schemes");
+            var xml = new StringBuilder();
+            xml.append_printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<style-scheme id=\"%s\" name=\"%s\" parent-scheme=\"%s\" version=\"1.0\">\n",
+                id, Markup.escape_text(scheme.name), scheme.id);
+            foreach (string style in new string[] { "def:underlined", "def:link-text", "def:link-destination",
+                                                    "markdown:url", "markdown:link-text", "markdown:link-destination",
+                                                    "markdown:image-marker", "markdown:email-address" }) {
+                xml.append_printf("  <style name=\"%s\" foreground=\"%s\"/>\n", style, accent);
+            }
+            xml.append("</style-scheme>\n");
+            try {
+                DirUtils.create_with_parents(dir, 0755);
+                FileUtils.set_contents(GLib.Path.build_filename(dir, id + ".xml"), xml.str);
+                var sm = GtkSource.StyleSchemeManager.get_default();
+                bool known = false;
+                foreach (string path in sm.get_search_path()) if (path == dir) known = true;
+                if (!known) sm.append_search_path(dir);
+                sm.force_rescan();
+                var derived = sm.get_scheme(id);
+                _md_buffer.style_scheme = derived != null ? derived : scheme;
+            } catch (Error e) {
+                _md_buffer.style_scheme = scheme;
+            }
+        }
 
+        private void build_md_switcher() {
             _md_stack.notify["visible-child-name"].connect(() => {
                 string cur = _md_stack.visible_child_name;
                 if (cur == "R" || cur == "S") {
@@ -834,23 +1608,24 @@ namespace Singularity.Apps {
                         return GLib.Source.REMOVE;
                     });
                 }
-                _refresh_md_mode_icon();
+                if (_md_switcher != null) {
+                    _md_switch_sync = true;
+                    _md_switcher.set_active(cur);
+                    _md_switch_sync = false;
+                }
+                sync_actions();
             });
-            return ctrl;
         }
 
         private void enter_markdown_mode() {
             setup_markdown_mode();
             _layout_stack.visible_child_name = "markdown";
             set_doc_bubbles_visible(true);
-            toolbar.set_title_widget(_md_mode_switcher);
-            _md_mode_switcher.halign = Align.CENTER;
+            GLib.Idle.add(() => {
+                if (in_markdown() && settings.get_boolean("show-outline") && main_window.get_width() >= 1500) main_window.set_sidebar_visible(true);
+                return GLib.Source.REMOVE;
+            });
             GLib.Idle.add(() => { update_outline(); return GLib.Source.REMOVE; });
-        }
-
-        private void exit_markdown_mode() {
-            _layout_stack.visible_child_name = "odt";
-            set_doc_bubbles_visible(true);
         }
 
         private void on_md_source_changed() {
@@ -872,394 +1647,109 @@ namespace Singularity.Apps {
             if (_md_preview_s == null && _md_preview_v == null) return;
             string md_text = _md_buffer.text;
             var parser = new Markdown.Parser();
-            string html = parser.to_full_html(md_text);
+            var ink = (_md_preview_s ?? _md_preview_v).get_color();
+            bool dark = 0.2126 * ink.red + 0.7152 * ink.green + 0.0722 * ink.blue > 0.5;
+            string html = parser.to_full_html(md_text, Singularity.Style.StyleManager.get_default().accent_hex, dark, main_window.floating_bubbles ? 60 : 24);
+            string shown = md_text.strip() == "" ? "empty" : "preview";
+            if (_md_preview_stack_s != null) _md_preview_stack_s.visible_child_name = shown;
+            if (_md_preview_stack_v != null) _md_preview_stack_v.visible_child_name = shown;
             if (_md_preview_s != null) _md_preview_s.load_html(html, null);
             if (_md_preview_v != null) _md_preview_v.load_html(html, null);
         }
 
-        // Buffer signals
 
-        private void on_buffer_changed() {
-            mark_modified();
-            update_word_count();
-            GLib.Idle.add(() => { update_outline(); return GLib.Source.REMOVE; });
-            if (!_auto_format_lock) {
-                _auto_format_lock = true;
-                do_autocorrect();
-                _auto_format_lock = false;
+        private void mark_modified() {
+            if (!modified) {
+                modified = true;
+                update_title();
             }
-        }
-
-        private void on_mark_set(Gtk.TextIter loc, Gtk.TextMark mark) {
         }
 
         private void update_word_count() {
-            string txt = _is_markdown ? _md_buffer.text : text_buffer.text;
-            if (txt.strip() == "") { word_count_label.label = "0 words"; return; }
+            if (_md_buffer == null) return;
+            string txt = _md_buffer.text;
             int cnt = 0;
-            foreach (var w in txt.split_set(" \t\n\r"))
-                if (w.strip() != "") cnt++;
-            word_count_label.label = "%d word%s".printf(cnt, cnt == 1 ? "" : "s");
+            foreach (var w in txt.split_set(" \t\n\r")) if (w.strip() != "") cnt++;
+            word_count_label.label = ngettext("%d word", "%d words", cnt).printf(cnt);
+        }
+
+        private void add_md_heading() {
+            if (_md_buffer == null) return;
+            Gtk.TextIter it;
+            _md_buffer.get_iter_at_mark(out it, _md_buffer.get_insert());
+            it.set_line_offset(0);
+            var end = it;
+            if (!end.ends_line()) end.forward_to_line_end();
+            string line = _md_buffer.get_text(it, end, false);
+            _md_buffer.begin_user_action();
+            if (!line.has_prefix("#")) _md_buffer.insert(ref it, line.strip() == "" ? "# " + _("Heading") : "# ", -1);
+            _md_buffer.end_user_action();
+            active_view().grab_focus();
         }
 
         private void update_outline() {
-            while (outline_box.get_first_child() != null)
-                outline_box.remove(outline_box.get_first_child());
+            while (outline_box.get_first_child() != null) outline_box.remove(outline_box.get_first_child());
+            outline_box.append(_md_outline_empty);
+            if (_md_buffer == null) return;
+            string[] lines = _md_buffer.text.split("\n");
+            int line_no = 0;
+            foreach (string raw in lines) {
+                int this_line = line_no++;
+                string line = raw.strip();
+                int level = 0;
+                if (line.has_prefix("#### ")) { level = 4; line = line.substring(5); }
+                else if (line.has_prefix("### ")) { level = 3; line = line.substring(4); }
+                else if (line.has_prefix("## ")) { level = 2; line = line.substring(3); }
+                else if (line.has_prefix("# ")) { level = 1; line = line.substring(2); }
+                if (level == 0) continue;
+                line = line.strip();
+                if (line == "") continue;
+                var row_lbl = new Label(line);
+                row_lbl.xalign = 0;
+                row_lbl.halign = Align.START;
+                row_lbl.ellipsize = Pango.EllipsizeMode.END;
+                var row = new Button();
+                row.set_child(row_lbl);
+                row.has_frame = false;
+                row.halign = Align.FILL;
+                row.add_css_class("write-outline-row");
+                row.add_css_class("write-outline-h%d".printf(level));
+                row.margin_start = (level - 1) * 12;
+                row.clicked.connect(() => {
+                    Gtk.TextIter it;
+                    _md_buffer.get_iter_at_line(out it, this_line);
+                    _md_buffer.place_cursor(it);
+                    active_view().scroll_to_mark(_md_buffer.get_insert(), 0.1, true, 0, 0.2);
+                    active_view().grab_focus();
+                });
+                outline_box.append(row);
+                _md_outline_empty.visible = false;
+            }
+            _md_outline_empty.visible = outline_box.get_first_child() == _md_outline_empty && _md_outline_empty.get_next_sibling() == null;
+        }
 
-            if (_is_markdown) {
-                // Parse # / ## / ### headings from the MD buffer
-                string[] lines = _md_buffer.text.split("\n");
-                foreach (string raw in lines) {
-                    string line = raw.strip();
-                    int level = 0;
-                    if      (line.has_prefix("#### ")) { level = 4; line = line.substring(5); }
-                    else if (line.has_prefix("### "))  { level = 3; line = line.substring(4); }
-                    else if (line.has_prefix("## "))   { level = 2; line = line.substring(3); }
-                    else if (line.has_prefix("# "))    { level = 1; line = line.substring(2); }
-                    if (level == 0) continue;
-                    line = line.strip();
-                    if (line == "") continue;
-                    int indent = (level - 1) * 12;
-                    var row_lbl = new Label(line);
-                    row_lbl.xalign = 0;
-                    row_lbl.halign = Align.START;
-                    row_lbl.ellipsize = Pango.EllipsizeMode.END;
-                    var row = new Button();
-                    row.set_child(row_lbl);
-                    row.has_frame = false;
-                    row.halign = Align.FILL;
-                    row.add_css_class("write-outline-row");
-                    row.add_css_class("write-outline-h%d".printf(level));
-                    row.margin_start = indent;
-                    outline_box.append(row);
-                }
+        private async void insert_md_equation() {
+            if (!FormulaBridge.available()) {
+                toast(_("Install Formula to insert equations"));
                 return;
             }
-
-            Gtk.TextIter it;
-            text_buffer.get_start_iter(out it);
-
-            while (!it.is_end()) {
-                Gtk.TextTag? ht = null;
-                string hid = "";
-                int indent = 0;
-                if      (it.has_tag(tag_h1)) { ht = tag_h1; hid = "h1"; indent = 0; }
-                else if (it.has_tag(tag_h2)) { ht = tag_h2; hid = "h2"; indent = 12; }
-                else if (it.has_tag(tag_h3)) { ht = tag_h3; hid = "h3"; indent = 22; }
-                else if (it.has_tag(tag_h4)) { ht = tag_h4; hid = "h4"; indent = 30; }
-
-                if (ht != null) {
-                    Gtk.TextIter end = it;
-                    end.forward_to_tag_toggle(ht);
-                    string txt = text_buffer.get_text(it, end, false).strip();
-                    if (txt != "") {
-                        var row_lbl = new Label(txt);
-                        row_lbl.xalign = 0;
-                        row_lbl.halign = Align.START;
-                        var row = new Button();
-                        row.set_child(row_lbl);
-                        row.has_frame = false;
-                        row.halign = Align.FILL;
-                        row.add_css_class("write-outline-row");
-                        row.add_css_class("write-outline-" + hid);
-                        row.margin_start = indent;
-                        Gtk.TextIter snap = it;
-                        row.clicked.connect(() => {
-                            text_buffer.place_cursor(snap);
-                            text_view.scroll_to_mark(text_buffer.get_insert(), 0.1, true, 0, 0.3);
-                        });
-                        outline_box.append(row);
-                    }
-                    it = end;
-                } else {
-                    it.forward_char();
-                }
-            }
+            string target = FormulaBridge.new_target();
+            if (!(yield FormulaBridge.edit(target, null))) return;
+            string? tex = FormulaBridge.latex_for(target);
+            FormulaBridge.discard(target);
+            if (tex == null || _md_buffer == null) return;
+            _md_buffer.insert_at_cursor("$$" + tex + "$$", -1);
         }
 
-        // Formatting
-
-        private void apply_inline(string tag_name) {
-            Gtk.TextIter s, e;
-            if (!text_buffer.get_selection_bounds(out s, out e)) return;
-            var tag = text_buffer.tag_table.lookup(tag_name);
-            if (tag == null) return;
-
-            bool all = true;
-            Gtk.TextIter c = s;
-            while (c.compare(e) < 0) {
-                if (!c.has_tag(tag)) { all = false; break; }
-                c.forward_char();
-            }
-            text_buffer.begin_user_action();
-            if (all) text_buffer.remove_tag(tag, s, e);
-            else     text_buffer.apply_tag(tag, s, e);
-            text_buffer.end_user_action();
-        }
-
-        private void apply_para_style(string style_id) {
-            Gtk.TextIter s, e;
-            bool has_sel = text_buffer.get_selection_bounds(out s, out e);
-            if (!has_sel) {
-                text_buffer.get_iter_at_mark(out s, text_buffer.get_insert());
-                e = s;
-            }
-            s.set_line_offset(0);
-            if (!e.ends_line()) e.forward_to_line_end();
-
-            Gtk.TextTag[] style_tags = { tag_h1, tag_h2, tag_h3, tag_h4, tag_body,
-                                          tag_quote, tag_code, tag_bullet, tag_numbered };
-
-            if (style_id == "bullet" || style_id == "numbered") return;
-
-            text_buffer.begin_user_action();
-            // Strip any list prefixes first
-            strip_list_prefixes(s, e);
-            // Re-fetch iters after text mutation
-            text_buffer.get_selection_bounds(out s, out e);
-            s.set_line_offset(0);
-            if (!e.ends_line()) e.forward_to_line_end();
-            foreach (var t in style_tags) text_buffer.remove_tag(t, s, e);
-            var nt = text_buffer.tag_table.lookup(style_id);
-            if (nt != null) text_buffer.apply_tag(nt, s, e);
-            text_buffer.end_user_action();
-        }
-
-        // Strip "• " or "N. " prefixes from each line in [s, e]
-
-        private void strip_list_prefixes(Gtk.TextIter s, Gtk.TextIter e) {
-            int start_line = s.get_line();
-            int end_line   = e.get_line();
-            // Walk lines in reverse to keep iters valid
-            for (int ln = end_line; ln >= start_line; ln--) {
-                Gtk.TextIter line_start;
-                text_buffer.get_iter_at_line(out line_start, ln);
-                Gtk.TextIter line_end = line_start;
-                line_end.forward_to_line_end();
-                string line = text_buffer.get_text(line_start, line_end, false);
-                // Match "• " (bullet) or "N. " (numbered)
-                if (line.has_prefix("• ")) {
-                    var del_end = line_start;
-                    del_end.forward_chars(2); // "• " is 2 Vala chars but "•" is 3 bytes
-                    // Forward by the byte-length-aware char count
-                    Gtk.TextIter del_s = line_start;
-                    del_s.forward_chars(0);
-                    // Use byte-safe deletion: delete "• " = bullet(3 bytes) + space(1 byte)
-                    var mark = text_buffer.get_insert();
-                    Gtk.TextIter bs = line_start;
-                    Gtk.TextIter be = line_start;
-                    be.forward_chars(2); // GTK iter counts Unicode chars
-                    text_buffer.delete(ref bs, ref be);
-                } else {
-                    // Match "N. " pattern
-                    var re = new GLib.Regex("^\\d+\\.\\s");
-                    GLib.MatchInfo mi;
-                    if (re.match(line, 0, out mi)) {
-                        string matched = mi.fetch(0);
-                        Gtk.TextIter bs = line_start;
-                        Gtk.TextIter be = line_start;
-                        be.forward_chars(matched.char_count());
-                        text_buffer.delete(ref bs, ref be);
-                    }
-                }
-            }
-        }
-
-        private void on_link_requested() {
-            Gtk.TextIter s, e;
-            if (!text_buffer.get_selection_bounds(out s, out e)) return;
-
-            var dialog = new Singularity.Widgets.AppDialog((Gtk.Application)this, true);
-            dialog.set_title(_("Insert Link"));
-            dialog.transient_for = main_window;
-            dialog.set_default_size(360, 130);
-
-            var box = new Box(Orientation.VERTICAL, 8);
-            box.margin_start = 16; box.margin_end = 16;
-            box.margin_top = 10;  box.margin_bottom = 12;
-
-            var url = new Entry();
-            url.placeholder_text = "https://…";
-            url.hexpand = true;
-            Singularity.Widgets.ContextMenu.attach_editable(url);
-
-            var btns = new Box(Orientation.HORIZONTAL, 8);
-            btns.halign = Align.END;
-            var ok = new Button.with_label(_("Insert"));
-            ok.add_css_class("suggested-action");
-            var cancel = new Button.with_label(_("Cancel"));
-            cancel.clicked.connect(() => dialog.close());
-            ok.clicked.connect(() => {
-                if (url.text.strip() != "")
-                    text_buffer.apply_tag(tag_link, s, e);
-                dialog.close();
-            });
-            btns.append(cancel);
-            btns.append(ok);
-            box.append(new Label(_("URL:")));
-            box.append(url);
-            box.append(btns);
-            dialog.content_box.append(box);
-            dialog.present();
-            url.grab_focus();
-        }
-
-        // Insert objects
-
-        private void on_insert_table() {
-            var dialog = new Singularity.Widgets.AppDialog((Gtk.Application)this, true);
-            dialog.set_title(_("Insert Table"));
-            dialog.transient_for = main_window;
-            dialog.set_default_size(260, 155);
-
-            var grid = new Grid();
-            grid.column_spacing = 12; grid.row_spacing = 8;
-            grid.margin_start = 16; grid.margin_end = 16;
-            grid.margin_top = 12;   grid.margin_bottom = 12;
-
-            var rows_spin = new SpinButton.with_range(1, 30, 1);
-            rows_spin.value = 3;
-            var cols_spin = new SpinButton.with_range(1, 12, 1);
-            cols_spin.value = 3;
-
-            grid.attach(new Label(_("Rows:")),    0, 0); grid.attach(rows_spin, 1, 0);
-            grid.attach(new Label(_("Columns:")), 0, 1); grid.attach(cols_spin, 1, 1);
-
-            var btns = new Box(Orientation.HORIZONTAL, 8);
-            btns.halign = Align.END;
-            var cancel = new Button.with_label(_("Cancel"));
-            cancel.clicked.connect(() => dialog.close());
-            var insert = new Button.with_label(_("Insert"));
-            insert.add_css_class("suggested-action");
-            insert.clicked.connect(() => {
-                int r = (int)rows_spin.value;
-                int c = (int)cols_spin.value;
-                dialog.close();
-                do_insert_table(r, c);
-            });
-            btns.append(cancel);
-            btns.append(insert);
-            grid.attach(btns, 0, 2, 2, 1);
-
-            dialog.content_box.append(grid);
-            dialog.present();
-        }
-
-        private void do_insert_table(int rows, int cols) {
-            Gtk.TextIter cursor;
-            text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-            if (!cursor.starts_line()) {
-                text_buffer.insert(ref cursor, "\n", -1);
-                text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-            }
-            var anchor = text_buffer.create_child_anchor(cursor);
-            text_buffer.insert(ref cursor, "\n", -1);
-
-            var tbl = new Grid();
-            tbl.add_css_class("write-table");
-            tbl.column_homogeneous = true;
-            tbl.row_spacing = 0; tbl.column_spacing = 0;
-            for (int r = 0; r < rows; r++) {
-                for (int c = 0; c < cols; c++) {
-                    var cell = new Gtk.TextView();
-                    cell.wrap_mode = WrapMode.WORD_CHAR;
-                    cell.add_css_class("write-table-cell");
-                    if (r == 0) cell.add_css_class("write-table-header");
-                    cell.set_size_request(90, 32);
-                    tbl.attach(cell, c, r, 1, 1);
-                }
-            }
-            text_view.add_child_at_anchor(tbl, anchor);
-            tbl.show();
-        }
-
-        private void on_insert_image() {
-            var fd = new FileDialog();
-            fd.title = _("Insert Image");
-            var filter = new FileFilter();
-            filter.name = "Images";
-            filter.add_mime_type("image/png");
-            filter.add_mime_type("image/jpeg");
-            filter.add_mime_type("image/webp");
-            filter.add_mime_type("image/gif");
-            filter.add_mime_type("image/svg+xml");
-            var flist = new GLib.ListStore(typeof(FileFilter));
-            flist.append(filter);
-            fd.filters = flist;
-            fd.open.begin(main_window, null, (o, r) => {
-                try { do_insert_image(fd.open.end(r)); } catch {}
-            });
-        }
-
-        private void do_insert_image(GLib.File file) {
-            Gtk.TextIter cursor;
-            text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-            if (!cursor.starts_line()) {
-                text_buffer.insert(ref cursor, "\n", -1);
-                text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-            }
-            var anchor = text_buffer.create_child_anchor(cursor);
-            text_buffer.insert(ref cursor, "\n", -1);
-
-            var pic = new Gtk.Picture.for_file(file);
-            pic.add_css_class("write-image");
-            pic.content_fit = ContentFit.SCALE_DOWN;
-            pic.set_size_request(400, -1);
-            text_view.add_child_at_anchor(pic, anchor);
-            pic.show();
-        }
-
-        private void on_insert_footnote() {
-            footnote_num++;
-            int fn = footnote_num;
-            Gtk.TextIter cursor;
-            text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-            var anchor = text_buffer.create_child_anchor(cursor);
-
-            var btn = new Button.with_label("[%d]".printf(fn));
-            btn.has_frame = false;
-            btn.add_css_class("write-footnote-anchor");
-            btn.tooltip_text = _("Footnote %d - click to edit").printf(fn);
-
-            var pop = new Popover();
-            pop.set_parent(btn);
-            var fn_box = new Box(Orientation.VERTICAL, 8);
-            fn_box.margin_start = 10; fn_box.margin_end = 10;
-            fn_box.margin_top = 8;    fn_box.margin_bottom = 8;
-            fn_box.append(new Label(_("Footnote %d").printf(fn)));
-            var fn_tv = new Gtk.TextView();
-            fn_tv.wrap_mode = WrapMode.WORD_CHAR;
-            fn_tv.set_size_request(280, 72);
-            fn_tv.add_css_class("write-footnote-editor");
-            var fn_scroll = new ScrolledWindow();
-            fn_scroll.set_child(fn_tv);
-            fn_scroll.set_size_request(280, 72);
-            fn_box.append(fn_scroll);
-            pop.set_child(fn_box);
-            btn.clicked.connect(() => pop.popup());
-
-            text_view.add_child_at_anchor(btn, anchor);
-            btn.show();
-        }
-
-        // Find & Replace
-
-        private void do_find_forward(string q) { _last_search_query = q; do_find(q, true); }
-        private void do_find_backward(string q) { _last_search_query = q; do_find(q, false); }
-
-        private Gtk.TextBuffer active_buffer() {
-            return _is_markdown && _md_ui_built ? (Gtk.TextBuffer) _md_buffer : (Gtk.TextBuffer) text_buffer;
-        }
         private Gtk.TextView active_view() {
-            if (!_is_markdown || !_md_ui_built) return text_view;
             if (_md_stack != null && _md_stack.visible_child_name == "S" && _md_source_view_s != null)
                 return _md_source_view_s;
             return _md_source_view;
         }
 
         private void do_find(string q, bool fwd) {
-            if (q == "") return;
-            var buf  = active_buffer();
+            if (q == "" || _md_buffer == null) return;
+            var buf = _md_buffer;
             var view = active_view();
             Gtk.TextIter start, ms, me;
             buf.get_iter_at_mark(out start, buf.get_insert());
@@ -1287,8 +1777,11 @@ namespace Singularity.Apps {
         }
 
         private void count_matches(string q) {
-            if (q == "") { find_bar.set_match_info(0, 0); return; }
-            var buf = active_buffer();
+            if (q == "" || _md_buffer == null) {
+                find_bar.set_match_info(0, 0);
+                return;
+            }
+            var buf = _md_buffer;
             Gtk.TextIter it, ms, me, cursor;
             buf.get_start_iter(out it);
             buf.get_iter_at_mark(out cursor, buf.get_insert());
@@ -1303,7 +1796,8 @@ namespace Singularity.Apps {
         }
 
         private void do_replace_one(string q, string rep) {
-            var buf = active_buffer();
+            if (_md_buffer == null) return;
+            var buf = _md_buffer;
             Gtk.TextIter s, e;
             if (buf.get_selection_bounds(out s, out e)) {
                 string sel = buf.get_text(s, e, false);
@@ -1314,12 +1808,12 @@ namespace Singularity.Apps {
                     buf.end_user_action();
                 }
             }
-            do_find_forward(q);
+            do_find(q, true);
         }
 
         private void do_replace_all(string q, string rep) {
-            if (q == "") return;
-            var buf = active_buffer();
+            if (q == "" || _md_buffer == null) return;
+            var buf = _md_buffer;
             Gtk.TextIter it, ms, me;
             buf.get_start_iter(out it);
             var flags = Gtk.TextSearchFlags.CASE_INSENSITIVE | Gtk.TextSearchFlags.TEXT_ONLY;
@@ -1329,848 +1823,502 @@ namespace Singularity.Apps {
                 buf.delete(ref ms, ref me);
                 buf.insert(ref ms, rep, -1);
                 it = ms;
-                it.forward_chars(rep.length);
+                it.forward_chars(rep.char_count());
                 cnt++;
             }
             buf.end_user_action();
             find_bar.set_match_info(cnt, 0);
         }
 
-        // File operations
-
-        private void mark_modified() {
-            if (!modified) { modified = true; update_title(); }
+        private void update_title() {
+            string n;
+            bool mod;
+            if (in_rich()) {
+                n = _rich.title();
+                mod = _rich.modified;
+            } else {
+                if (current_file != null) n = current_file.get_basename();
+                else if (_suggested_name != null) n = _suggested_name;
+                else n = _("Untitled");
+                mod = modified;
+                if (n.has_suffix(".md")) n = n[0:n.length - 3];
+            }
+            toolbar.set_title(mod ? n + " *" : n);
+            main_window.title = n;
+            sync_actions();
         }
 
-        private void update_title() {
-            string n = current_file != null ? current_file.get_basename() : "Untitled";
-            if (n.has_suffix(".odt")) n = n[0:n.length - 4];
-            if (n.has_suffix(".md"))  n = n[0:n.length - 3];
-            string full = modified ? n + " *" : n;
-            toolbar.set_title(full);
-            main_window.title = n;
+        private Write.FileFormat default_format() {
+            string f = settings.get_string("default-save-format");
+            var fmt = Write.FileFormat.from_extension("x." + f);
+            return fmt.writable() && fmt.rich() ? fmt : Write.FileFormat.DOCX;
+        }
+
+        private void show_rich_document(Write.Document d, GLib.File? file, Write.FileFormat fmt) {
+            _is_markdown = false;
+            _rich.file = file;
+            _rich.format = fmt;
+            _rich.recovery_id = Uuid.string_random();
+            _rich.set_document(d);
+            _layout_stack.visible_child_name = "rich";
+            toolbar.set_title_widget(null);
+            set_doc_bubbles_visible(true);
+            if (_search_bubble != null && _search_bubble.text != "") _search_bubble.clear();
+            main_window.set_sidebar_visible(false);
+            GLib.Idle.add(() => {
+                if (in_rich()) main_window.set_sidebar_visible(settings.get_boolean("show-outline") && main_window.get_width() >= 1500);
+                return GLib.Source.REMOVE;
+            });
+            _rich.nav.refresh();
+            update_title();
+            if (_rich.has_document_scripts()) {
+                var dlg = new Singularity.Widgets.ConfirmDialog((Gtk.Application) this,
+                    _("Enable Scripts?"), "dialog-warning-symbolic",
+                    _("This document contains scripts that can change it when it is opened, saved or printed. Enable them only if you trust where the document comes from."),
+                    _("Enable Scripts"), Singularity.Widgets.ConfirmDialog.ActionStyle.SUGGESTED);
+                dlg.transient_for = main_window;
+                dlg.response.connect((r) => {
+                    if (r != Singularity.Widgets.ConfirmDialog.Response.PRIMARY) return;
+                    _rich.load_document_scripts(true);
+                    _rich.fire_script_event("open");
+                });
+                dlg.present();
+            }
+            GLib.Idle.add(() => {
+                _rich.view.grab_focus();
+                return GLib.Source.REMOVE;
+            });
         }
 
         private void new_document() {
-            current_file = null;
-            text_buffer.set_text("", 0);
-            modified = false;
-            _layout_stack.visible_child_name = "odt";
-            set_doc_bubbles_visible(true);
-            page_canvas.show_ruler(true);
-            update_title();
-            update_word_count();
-            update_outline();
-        }
-
-        private void on_new() {
-            new_document();
+            show_rich_document(Write.Document.create_blank(), null, default_format());
         }
 
         private void on_close_document() {
-            if (!modified) {
-                show_start_page();
-                return;
-            }
-            var dlg = new Singularity.Widgets.AppDialog((Gtk.Application)this, true);
-            dlg.set_title(_("Close Document?"));
-            dlg.transient_for = main_window;
-            dlg.set_default_size(320, 140);
-            var box = new Box(Orientation.VERTICAL, 8);
-            box.margin_start = 16; box.margin_end = 16;
-            box.margin_top = 10; box.margin_bottom = 12;
-            var lbl = new Label(_("You have unsaved changes.\nThey will be lost if you close now."));
-            lbl.wrap = true;
-            lbl.xalign = 0f;
-            var btns = new Box(Orientation.HORIZONTAL, 8);
-            btns.halign = Align.END;
-            var cancel_btn = new Button.with_label(_("Cancel"));
-            cancel_btn.clicked.connect(() => dlg.close());
-            var close_btn2 = new Button.with_label(_("Close Without Saving"));
-            close_btn2.add_css_class("destructive-action");
-            close_btn2.clicked.connect(() => {
-                dlg.close();
+            guard_unsaved(() => {
+                _rich.modified = false;
                 modified = false;
                 show_start_page();
             });
-            btns.append(cancel_btn);
-            btns.append(close_btn2);
-            box.append(lbl);
-            box.append(btns);
-            dlg.content_box.append(box);
-            dlg.present();
         }
 
-        private void on_open() { on_open_with_kind("all"); }
-
-        private void on_open_with_kind(string kind) {
+        private void on_open() {
             var fd = new FileDialog();
-            fd.title = (kind == "pdf") ? "Open PDF" : "Open Document";
-
-            var filter_md = new FileFilter();
-            filter_md.name = "Markdown Documents";
-            filter_md.add_pattern("*.md");
-            filter_md.add_pattern("*.markdown");
-
-            var filter_pdf = new FileFilter();
-            filter_pdf.name = "PDF Documents";
-            filter_pdf.add_pattern("*.pdf");
-
-            var filter_all = new FileFilter();
-            filter_all.name = "All Supported";
-            filter_all.add_pattern("*.md");
-            filter_all.add_pattern("*.markdown");
-            filter_all.add_pattern("*.pdf");
-
+            set_documents_folder(fd);
+            fd.title = _("Open Document");
             var flist = new GLib.ListStore(typeof(FileFilter));
-            if (kind == "md") {
-                flist.append(filter_md);
-            } else if (kind == "pdf") {
-                flist.append(filter_pdf);
-            } else {
-                flist.append(filter_all);
-                flist.append(filter_md);
-                flist.append(filter_pdf);
-            }
+            flist.append(WriteFiles.all_documents());
+            foreach (var f in new Write.FileFormat[] { Write.FileFormat.DOCX, Write.FileFormat.ODT, Write.FileFormat.RTF, Write.FileFormat.DOC, Write.FileFormat.HTML, Write.FileFormat.EPUB, Write.FileFormat.MARKDOWN, Write.FileFormat.TEXT })
+                flist.append(WriteFiles.filter_for(f));
             fd.filters = flist;
             fd.open.begin(main_window, null, (o, r) => {
                 try {
                     var file = fd.open.end(r);
                     if (file != null) do_open(file);
                 } catch (Error e) {
-                    warning("on_open: FileDialog.open failed: %s", e.message);
                 }
             });
         }
 
         private void do_open(GLib.File file) {
-            string path = file.get_path();
-            if (path == null) return;
-            string lp = path.down();
-            if (lp.has_suffix(".pdf")) {
-                do_open_pdf(file);
+            guard_unsaved(() => open_now(file));
+        }
+
+        private void open_now(GLib.File file) {
+            string? path = file.get_path();
+            if (path == null) {
+                toast(_("Only local files can be opened."));
                 return;
             }
-            do_open_markdown(file);
-        }
-
-        private Pdf.Viewer? _pdf_viewer = null;
-        private Singularity.Widgets.HoverControls? _pdf_host = null;
-        private Singularity.Widgets.ChipBar? _pdf_tabs = null;
-        private HashTable<string, GLib.File> _pdf_open = null;
-        private bool _is_pdf = false;
-
-        private string _pdf_chip_id(GLib.File f) { return f.get_path(); }
-
-        private void do_open_pdf(GLib.File file) {
-            if (_is_markdown) {
-                _is_markdown = false;
-                exit_markdown_mode();
-            }
-
-            if (_pdf_viewer == null) _build_pdf_mode();
-
-            string id = _pdf_chip_id(file);
-            if (_pdf_open.lookup(id) == null) {
-                _pdf_open.insert(id, file);
-                _pdf_tabs.add_chip(id, file.get_basename());
-            }
-
-            if (!_pdf_viewer.load(file.get_path())) {
-                warning("do_open_pdf: load failed");
-                return;
-            }
-            _pdf_tabs.set_active(id);
-
-            _is_pdf       = true;
-            current_file  = file;
-            add_to_recent(file);
-            modified = false;
-            page_canvas.show_ruler(false);
-            _layout_stack.visible_child_name = "pdf";
-            // PDF mode uses _pdf_host's own bubbles, not the doc bubbles.
-            set_doc_bubbles_visible(false);
-            update_title();
-        }
-
-        private void _build_pdf_mode() {
-            _pdf_open   = new HashTable<string, GLib.File> (str_hash, str_equal);
-            _pdf_viewer = new Pdf.Viewer();
-
-            _pdf_tabs = new Singularity.Widgets.ChipBar();
-            _pdf_tabs.add_css_class("write-pdf-tabs");
-            _pdf_tabs.hexpand        = true;
-            _pdf_tabs.chip_activated.connect((id) => {
-                var f = _pdf_open.lookup(id);
-                if (f == null) return;
-                if (_pdf_viewer.load(f.get_path())) {
-                    _pdf_tabs.set_active(id);
-                    current_file = f;
-                    update_title();
-                }
-            });
-            _pdf_tabs.chip_closed.connect((id) => {
-                _pdf_open.remove(id);
-                _pdf_tabs.remove_chip(id);
-                if (_pdf_open.size() == 0) {
-                    exit_pdf_mode();
-                    show_start_page();
-                    return;
-                }
-                _pdf_open.foreach((_id, f) => {
-                    if (_pdf_viewer.load(f.get_path())) {
-                        _pdf_tabs.set_active(_id);
-                        current_file = f;
-                        update_title();
-                    }
-                });
-            });
-
-            var pdf_col = new Box(Orientation.VERTICAL, 0);
-            pdf_col.hexpand = true; pdf_col.vexpand = true;
-            pdf_col.append(_pdf_viewer);
-            pdf_col.append(_pdf_tabs);
-
-            _pdf_host = Singularity.Widgets.HoverControls.with_window_bubbles(main_window);
-            _pdf_host.set_content(pdf_col);
-
-            var open_btn = new Button.from_icon_name("document-open-symbolic");
-            open_btn.tooltip_text = _("Open another PDF");
-            open_btn.clicked.connect(() => {
-                var fd = new FileDialog();
-                fd.title = _("Open PDF");
-                var filt = new FileFilter();
-                filt.name = "PDF Documents";
-                filt.add_pattern("*.pdf");
-                var fl = new GLib.ListStore(typeof(FileFilter));
-                fl.append(filt);
-                fd.filters = fl;
-                fd.open.begin(main_window, null, (o, r) => {
-                    try {
-                        var f = fd.open.end(r);
-                        if (f != null) do_open_pdf(f);
-                    } catch (Error e) {
-                        warning("Open another PDF: %s", e.message);
-                    }
-                });
-            });
-            _pdf_host.add(open_btn);
-
-            var back_btn = new Button.from_icon_name("go-previous-symbolic");
-            back_btn.tooltip_text = _("Back to start");
-            back_btn.clicked.connect(() => {
-                exit_pdf_mode();
-                show_start_page();
-            });
-            _pdf_host.add(back_btn);
-
-            _layout_stack.add_named(_pdf_host, "pdf");
-        }
-
-        private void exit_pdf_mode() {
-            _is_pdf = false;
-        }
-
-        private void do_open_markdown(GLib.File file) {
-            string contents = "";
+            uint8[] data;
             try {
-                FileUtils.get_contents(file.get_path(), out contents);
+                FileUtils.get_data(path, out data);
             } catch (Error e) {
-                warning("do_open_markdown: %s", e.message);
+                toast(e.message);
                 return;
             }
+            var fmt = Write.Formats.sniff(data, file.get_basename());
+            if (fmt == Write.FileFormat.PDF) {
+                GLib.AppInfo.launch_default_for_uri_async.begin(file.get_uri(), null, null);
+                return;
+            }
+            if (fmt == Write.FileFormat.MARKDOWN || fmt == Write.FileFormat.TEXT) {
+                open_markdown(file, Write.Formats.decode_text(data));
+                return;
+            }
+            Write.Document d;
+            try {
+                Write.FileFormat f2;
+                d = WriteFiles.load(file, out f2);
+            } catch (Error e) {
+                toast(_("“%s” could not be opened: %s").printf(file.get_basename(), e.message));
+                return;
+            }
+            if (fmt == Write.FileFormat.DOTX || fmt == Write.FileFormat.OTT) {
+                show_rich_document(d, null, fmt == Write.FileFormat.OTT ? Write.FileFormat.ODT : Write.FileFormat.DOCX);
+                return;
+            }
+            show_rich_document(d, file, fmt);
+            add_to_recent(file);
+            if (!fmt.writable()) {
+                toast(_("%s files are opened read and write, and are saved as a new Word document.").printf(fmt.label()));
+            }
+        }
+
+        private void open_markdown(GLib.File file, string contents) {
             _is_markdown = true;
             enter_markdown_mode();
+            _md_buffer.begin_irreversible_action();
             _md_buffer.set_text(contents, -1);
+            _md_buffer.end_irreversible_action();
             current_file = file;
             add_to_recent(file);
             modified = false;
             update_title();
-            // Trigger initial preview render
             GLib.Idle.add(() => { update_md_preview(); return GLib.Source.REMOVE; });
         }
 
-        private void on_save() {
-            if (_is_pdf) return;
-            if (current_file == null) on_save_as();
-            else do_save(current_file);
-        }
-
-        private void on_save_as() {
-            if (_is_pdf) return;
-            var fd = new FileDialog();
-            fd.title = _("Save Document");
-            fd.initial_name = _is_markdown ? "Untitled.md" : "Untitled.md";
-            fd.save.begin(main_window, null, (o, r) => {
-                try {
-                    var file = fd.save.end(r);
-                    string path = file.get_path();
-                    if (_is_markdown) {
-                        if (!path.has_suffix(".md")) path += ".md";
-                    } else {
-                        if (!path.has_suffix(".odt")) path += ".odt";
-                    }
-                    var f = GLib.File.new_for_path(path);
-                    do_save(f);
-                    current_file = f;
-                    add_to_recent(f);
-                    modified = false;
-                    update_title();
-                } catch {}
-            });
-        }
-
-        private void do_save(GLib.File file) {
-            if (_is_pdf) return;
-            string md_text = _is_markdown ? _md_buffer.text : text_buffer.text;
-            try {
-                FileUtils.set_contents(file.get_path(), md_text);
-                modified = false;
-                update_title();
-            } catch (Error e) {
-                warning("do_save: %s", e.message);
-            }
-        }
-
-        // Export / Print
-
-        private void on_export() {
-            if (_is_pdf) return;
-            bool has_pandoc = GLib.Environment.find_program_in_path("pandoc") != null;
-
-            // Show a simple export menu anchored under the export button.
-            var pop = new Gtk.Popover();
-            pop.has_arrow = true;
-            pop.set_parent(_export_btn != null ? (Widget) _export_btn : (Widget) toolbar);
-
-            var box = new Box(Orientation.VERTICAL, 2);
-            box.margin_top = 4; box.margin_bottom = 4;
-            box.margin_start = 4; box.margin_end = 4;
-
-            void add_row(string icon, string label, bool sensitive, owned GLib.Func<Button> cb) {
-                var row = new Button();
-                row.has_frame = false;
-                row.add_css_class("flat");
-                row.sensitive = sensitive;
-                var r_box = new Box(Orientation.HORIZONTAL, 10);
-                r_box.margin_start = 4; r_box.margin_end = 8;
-                r_box.margin_top = 4; r_box.margin_bottom = 4;
-                var img = new Image.from_icon_name(icon);
-                img.pixel_size = 16;
-                var lbl = new Label(label);
-                lbl.halign = Align.START;
-                r_box.append(img);
-                r_box.append(lbl);
-                row.set_child(r_box);
-                row.clicked.connect(() => { pop.popdown(); cb(row); });
-                box.append(row);
-            }
-
-            add_row("document-send-symbolic", "Export as PDF" + (has_pandoc ? "" : " (print dialog)"), true, (b) => {
-                if (has_pandoc) export_md_via_pandoc.begin();
-                else export_via_print_dialog();
-            });
-            add_row("text-x-generic-symbolic", "Save copy as Markdown…", true, (b) => export_save_md_copy());
-            add_row("printer-symbolic", "Print…", true, (b) => export_via_print_dialog());
-
-            pop.set_child(box);
-            pop.popup();
-        }
-
-        private void export_via_print_dialog() {
-            var op = new Gtk.PrintOperation();
-            op.n_pages = 1;
-            op.draw_page.connect((ctx, page_nr) => {
-                var cr = ctx.get_cairo_context();
-                string content = _is_markdown ? _md_buffer.text : text_buffer.text;
-                cr.set_source_rgb(0, 0, 0);
-                cr.move_to(20, 20);
-                var layout = Pango.cairo_create_layout(cr);
-                layout.set_text(content, -1);
-                layout.set_width((int)((ctx.get_width() - 40) * Pango.SCALE));
-                layout.set_wrap(Pango.WrapMode.WORD_CHAR);
-                Pango.cairo_show_layout(cr, layout);
-            });
-            try {
-                op.run(Gtk.PrintOperationAction.PRINT_DIALOG, main_window);
-            } catch (Error e) {
-                warning("Print error: %s", e.message);
-            }
-        }
-
-        private void export_save_odt_copy() {
-            var fd = new FileDialog();
-            fd.title = _("Save ODT Copy");
-            fd.initial_name = current_file != null
-                ? GLib.Path.get_basename(current_file.get_path())
-                : "Untitled.odt";
-            fd.save.begin(main_window, null, (o, r) => {
-                try {
-                    var dest = fd.save.end(r);
-                    var odt = new Odt.Document();
-                    odt.save(dest.get_path(), text_buffer);
-                } catch {}
-            });
-        }
-
-        private void export_save_md_copy() {
-            var fd = new FileDialog();
-            fd.title = _("Save Markdown Copy");
-            fd.initial_name = current_file != null
-                ? GLib.Path.get_basename(current_file.get_path())
-                : "Untitled.md";
-            fd.save.begin(main_window, null, (o, r) => {
-                try {
-                    var dest = fd.save.end(r);
-                    FileUtils.set_contents(dest.get_path(), _md_buffer.text);
-                } catch {}
-            });
-        }
-
-        private async void export_odt_via_soffice() {
-            // Save to temp ODT, convert to PDF with soffice
-            string tmp_dir = GLib.DirUtils.make_tmp("singularity-write-XXXXXX");
-            string tmp_odt = GLib.Path.build_filename(tmp_dir, "export.odt");
-            var tmp_file = GLib.File.new_for_path(tmp_odt);
-            var odt = new Odt.Document();
-            if (!odt.save(tmp_odt, text_buffer)) {
-                warning("Export: failed to save temporary ODT");
-                GLib.DirUtils.remove(tmp_dir);
-                return;
-            }
-            string converter = GLib.Environment.find_program_in_path("soffice") != null
-                ? "soffice" : "libreoffice";
-            try {
-                var proc = new GLib.Subprocess.newv(
-                    { converter, "--headless", "--convert-to", "pdf", "--outdir", tmp_dir, tmp_odt },
-                    GLib.SubprocessFlags.NONE);
-                yield proc.wait_async();
-                string pdf_path = GLib.Path.build_filename(tmp_dir, "export.pdf");
-                if (GLib.FileUtils.test(pdf_path, GLib.FileTest.EXISTS)) {
-                    var fd = new FileDialog();
-                    fd.title = _("Save PDF As");
-                    fd.initial_name = current_file != null
-                        ? GLib.Path.get_basename(current_file.get_path()).replace(".odt", ".pdf")
-                        : "Untitled.pdf";
-                    fd.save.begin(main_window, null, (o, r) => {
-                        try {
-                            var dest = fd.save.end(r);
-                            string dest_path = dest.get_path();
-                            if (!dest_path.has_suffix(".pdf")) dest_path += ".pdf";
-                            GLib.FileUtils.rename(pdf_path, dest_path);
-                        } catch {}
-                        try { GLib.DirUtils.remove(tmp_dir); } catch {}
-                    });
-                } else {
-                    warning("Export: soffice did not produce PDF");
-                }
-            } catch (Error e) {
-                warning("Export via soffice: %s", e.message);
-            }
-        }
-
-        private async void export_md_via_pandoc() {
-            // Save to temp MD, convert to PDF with pandoc
-            string tmp_dir = GLib.DirUtils.make_tmp("singularity-write-XXXXXX");
-            string tmp_md  = GLib.Path.build_filename(tmp_dir, "export.md");
-            try {
-                FileUtils.set_contents(tmp_md, _md_buffer.text);
-                string tmp_pdf = GLib.Path.build_filename(tmp_dir, "export.pdf");
-                var proc = new GLib.Subprocess.newv(
-                    { "pandoc", tmp_md, "-o", tmp_pdf },
-                    GLib.SubprocessFlags.NONE);
-                yield proc.wait_async();
-                if (GLib.FileUtils.test(tmp_pdf, GLib.FileTest.EXISTS)) {
-                    var fd = new FileDialog();
-                    fd.title = _("Save PDF As");
-                    fd.initial_name = current_file != null
-                        ? GLib.Path.get_basename(current_file.get_path()).replace(".md", ".pdf")
-                        : "Untitled.pdf";
-                    fd.save.begin(main_window, null, (o, r) => {
-                        try {
-                            var dest = fd.save.end(r);
-                            string dest_path = dest.get_path();
-                            if (!dest_path.has_suffix(".pdf")) dest_path += ".pdf";
-                            GLib.FileUtils.rename(tmp_pdf, dest_path);
-                        } catch {}
-                        try { GLib.DirUtils.remove(tmp_dir); } catch {}
-                    });
-                }
-            } catch (Error e) {
-                warning("Export via pandoc: %s", e.message);
-            }
-        }
-
-
-
-        private bool handle_enter() {
-            Gtk.TextIter cursor;
-            text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-
-            Gtk.TextIter line_start = cursor;
-            line_start.set_line_offset(0);
-            Gtk.TextIter line_end = cursor;
-            if (!line_end.ends_line()) line_end.forward_to_line_end();
-            string line_text = text_buffer.get_text(line_start, line_end, false);
-
-            bool in_heading  = cursor.has_tag(tag_h1) || cursor.has_tag(tag_h2) ||
-                               cursor.has_tag(tag_h3) || cursor.has_tag(tag_h4);
-            bool in_bullet   = cursor.has_tag(tag_bullet);
-            bool in_numbered = cursor.has_tag(tag_numbered);
-            bool in_quote    = cursor.has_tag(tag_quote);
-
-            // Horizontal rule: "---" + Enter
-            if (line_text.strip() == "---") {
-                text_buffer.begin_user_action();
-                Gtk.TextIter ls = line_start, le = line_end;
-                text_buffer.delete(ref ls, ref le);
-                string hr_text = "────────────────────────────────────────";
-                Gtk.TextIter ins;
-                text_buffer.get_iter_at_mark(out ins, text_buffer.get_insert());
-                text_buffer.insert(ref ins, hr_text, -1);
-                Gtk.TextIter hs, he;
-                text_buffer.get_iter_at_mark(out hs, text_buffer.get_insert());
-                he = hs;
-                hs.set_line_offset(0);
-                if (!he.ends_line()) he.forward_to_line_end();
-                text_buffer.apply_tag(tag_hr, hs, he);
-                text_buffer.insert_at_cursor("\n", -1);
-                text_buffer.end_user_action();
-                return true;
-            }
-
-            // Bullet list
-            if (in_bullet && line_text.has_prefix("• ")) {
-                string content = line_text.substring("• ".length);
-                if (content.strip() == "") {
-                    // Empty bullet, exit list
-                    text_buffer.begin_user_action();
-                    Gtk.TextIter ls, le;
-                    text_buffer.get_iter_at_mark(out ls, text_buffer.get_insert());
-                    ls.set_line_offset(0);
-                    le = ls;
-                    le.forward_to_line_end();
-                    text_buffer.delete(ref ls, ref le);
-                    Gtk.TextIter cur2;
-                    text_buffer.get_iter_at_mark(out cur2, text_buffer.get_insert());
-                    text_buffer.remove_tag(tag_bullet,   cur2, cur2);
-                    text_buffer.remove_tag(tag_numbered, cur2, cur2);
-                    text_buffer.apply_tag(tag_body,      cur2, cur2);
-                    text_buffer.end_user_action();
-                    return true;
-                }
-                // Has content, continue bullet
-                text_buffer.begin_user_action();
-                text_buffer.insert_at_cursor("\n• ", -1);
-                Gtk.TextIter nc;
-                text_buffer.get_iter_at_mark(out nc, text_buffer.get_insert());
-                Gtk.TextIter ns = nc; ns.set_line_offset(0);
-                Gtk.TextIter ne = nc; if (!ne.ends_line()) ne.forward_to_line_end();
-                text_buffer.remove_tag(tag_numbered, ns, ne);
-                text_buffer.apply_tag(tag_bullet,    ns, ne);
-                text_buffer.end_user_action();
-                return true;
-            }
-
-            // Numbered list
-            if (in_numbered) {
-                var re_num = new GLib.Regex("^(\\d+)\\.\\s");
-                GLib.MatchInfo mi;
-                if (re_num.match(line_text, 0, out mi)) {
-                    int num        = int.parse(mi.fetch(1));
-                    string matched = mi.fetch(0);
-                    string content = line_text.substring(matched.length);
-                    if (content.strip() == "") {
-                        // Empty numbered, exit list
-                        text_buffer.begin_user_action();
-                        Gtk.TextIter ls, le;
-                        text_buffer.get_iter_at_mark(out ls, text_buffer.get_insert());
-                        ls.set_line_offset(0);
-                        le = ls;
-                        le.forward_to_line_end();
-                        text_buffer.delete(ref ls, ref le);
-                        Gtk.TextIter cur2;
-                        text_buffer.get_iter_at_mark(out cur2, text_buffer.get_insert());
-                        text_buffer.remove_tag(tag_bullet,   cur2, cur2);
-                        text_buffer.remove_tag(tag_numbered, cur2, cur2);
-                        text_buffer.apply_tag(tag_body,      cur2, cur2);
-                        text_buffer.end_user_action();
-                        return true;
-                    }
-                    // Has content, continue with incremented number
-                    string next_prefix = "\n%d. ".printf(num + 1);
-                    text_buffer.begin_user_action();
-                    text_buffer.insert_at_cursor(next_prefix, -1);
-                    Gtk.TextIter nc;
-                    text_buffer.get_iter_at_mark(out nc, text_buffer.get_insert());
-                    Gtk.TextIter ns = nc; ns.set_line_offset(0);
-                    Gtk.TextIter ne = nc; if (!ne.ends_line()) ne.forward_to_line_end();
-                    text_buffer.remove_tag(tag_bullet,  ns, ne);
-                    text_buffer.apply_tag(tag_numbered, ns, ne);
-                    text_buffer.end_user_action();
-                    return true;
-                }
-            }
-
-            // Heading, body
-            if (in_heading) {
-                text_buffer.begin_user_action();
-                text_buffer.insert_at_cursor("\n", -1);
-                Gtk.TextIter nc;
-                text_buffer.get_iter_at_mark(out nc, text_buffer.get_insert());
-                Gtk.TextIter ns = nc; ns.set_line_offset(0);
-                Gtk.TextIter ne = nc; if (!ne.ends_line()) ne.forward_to_line_end();
-                text_buffer.remove_tag(tag_h1,  ns, ne);
-                text_buffer.remove_tag(tag_h2,  ns, ne);
-                text_buffer.remove_tag(tag_h3,  ns, ne);
-                text_buffer.remove_tag(tag_h4,  ns, ne);
-                text_buffer.apply_tag(tag_body, ns, ne);
-                text_buffer.end_user_action();
-                return true;
-            }
-
-            // Quote: empty line, exit
-            if (in_quote && line_text.strip() == "") {
-                text_buffer.begin_user_action();
-                Gtk.TextIter cur2;
-                text_buffer.get_iter_at_mark(out cur2, text_buffer.get_insert());
-                Gtk.TextIter ls = cur2; ls.set_line_offset(0);
-                Gtk.TextIter le = ls;  if (!le.ends_line()) le.forward_to_line_end();
-                text_buffer.remove_tag(tag_quote, ls, le);
-                text_buffer.apply_tag(tag_body,   ls, le);
-                text_buffer.end_user_action();
-                return true;
-            }
-
-            return false;
-        }
-
-        // Markdown-like triggers at line start when Space is pressed.
-
-        private bool try_auto_format_line() {
-            Gtk.TextIter cursor;
-            text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-            Gtk.TextIter ls = cursor;
-            ls.set_line_offset(0);
-            string prefix = text_buffer.get_text(ls, cursor, false);
-
-            string[] heading_triggers = { "#", "##", "###" };
-            string[] heading_styles   = { "h1", "h2", "h3" };
-
-            // Longest-match first for heading hashes
-            for (int hi = heading_triggers.length - 1; hi >= 0; hi--) {
-                if (prefix == heading_triggers[hi]) {
-                    _auto_format_lock = true;
-                    text_buffer.begin_user_action();
-                    Gtk.TextIter s = ls, e = cursor;
-                    text_buffer.delete(ref s, ref e);
-                    apply_para_style(heading_styles[hi]);
-                    text_buffer.end_user_action();
-                    _auto_format_lock = false;
-                    return true;
-                }
-            }
-
-            if (prefix == ">") {
-                _auto_format_lock = true;
-                text_buffer.begin_user_action();
-                Gtk.TextIter s = ls, e = cursor;
-                text_buffer.delete(ref s, ref e);
-                apply_para_style("quote");
-                text_buffer.end_user_action();
-                _auto_format_lock = false;
-                return true;
-            }
-
-            return false;
-        }
-
-        // Autocorrect: replaces typographic symbols after space is inserted.
-
-        private void do_autocorrect() {
-            Gtk.TextIter cursor;
-            text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-            if (cursor.get_offset() == 0) return;
-
-            // Only trigger when last char in buffer is a space
-            Gtk.TextIter prev = cursor;
-            prev.backward_char();
-            unichar last_ch = prev.get_char();
-            if (last_ch != ' ' && last_ch != '\n') return;
-
-            Gtk.TextIter ls = prev;
-            ls.set_line_offset(0);
-            string before = text_buffer.get_text(ls, prev, false);
-            if (before == "") return;
-
-            string[] pats = { "--", "...", "(c)", "(C)", "(r)", "(R)", "(tm)", "(TM)",
-                              "1/2", "1/4", "3/4" };
-            string[] reps = { "-", "…", "©", "©", "®", "®", "™", "™",
-                              "½", "¼", "¾" };
-
-            for (int i = 0; i < pats.length; i++) {
-                if (before.has_suffix(pats[i])) {
-                    int nchars = pats[i].char_count();
-                    Gtk.TextIter del_s = prev;
-                    del_s.backward_chars(nchars);
-                    Gtk.TextIter del_e = prev;
-                    text_buffer.begin_user_action();
-                    text_buffer.delete(ref del_s, ref del_e);
-                    text_buffer.insert(ref del_s, reps[i], -1);
-                    text_buffer.end_user_action();
+        private void save_current(owned Done? after) {
+            if (in_rich()) {
+                if (_rich.file == null || !_rich.format.writable()) {
+                    on_save_as((owned) after);
                     return;
                 }
+                if (rich_write(_rich.file, _rich.format) && after != null) after();
+                return;
+            }
+            if (in_markdown()) {
+                if (current_file == null) {
+                    on_save_as((owned) after);
+                    return;
+                }
+                if (md_write(current_file) && after != null) after();
             }
         }
 
-        // Smart Home: first press, first non-whitespace; second, absolute start.
-
-        private bool handle_smart_home(bool shift) {
-            Gtk.TextIter cursor;
-            text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-            int current_line = cursor.get_line();
-
-            Gtk.TextIter abs_start = cursor;
-            abs_start.set_line_offset(0);
-
-            Gtk.TextIter first_nws = abs_start;
-            while (!first_nws.ends_line() && first_nws.get_char().isspace())
-                first_nws.forward_char();
-
-            int nws_offset    = first_nws.get_line_offset();
-            int cursor_offset = cursor.get_line_offset();
-
-            bool go_abs = (_last_home_line == current_line && cursor_offset == nws_offset);
-            Gtk.TextIter target = go_abs ? abs_start : first_nws;
-
-            if (shift)
-                text_buffer.move_mark(text_buffer.get_insert(), target);
-            else
-                text_buffer.place_cursor(target);
-
-            _last_home_line = go_abs ? -1 : current_line;
-            text_view.scroll_to_mark(text_buffer.get_insert(), 0.0, false, 0, 0);
+        private bool rich_write(GLib.File f, Write.FileFormat fmt, bool keep = true) {
+            if (keep) _rich.fire_script_event("save");
+            ChartSupport.prepare_all(_rich.doc);
+            try {
+                WriteFiles.save(_rich, f, fmt, keep && settings.get_boolean("keep-versions"));
+            } catch (Error e) {
+                toast(_("Could not save “%s”: %s").printf(f.get_basename(), e.message));
+                return false;
+            }
+            _rich.file = f;
+            _rich.format = fmt;
+            _rich.modified = false;
+            _rich.view.filename = f.get_basename();
+            WriteFiles.clear_recovery(_rich);
+            add_to_recent(f);
+            CloudActions.sync_back(main_window, f);
+            update_title();
             return true;
         }
 
-        // Smart quotes: context-aware typographic open/close substitution.
-
-        private bool handle_smart_quote(unichar raw) {
-            Gtk.TextIter cursor;
-            text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-
-            bool is_opening = true;
-            if (cursor.get_offset() > 0) {
-                Gtk.TextIter prev = cursor;
-                prev.backward_char();
-                unichar pc = prev.get_char();
-                if (pc.isalnum() || pc == ')' || pc == ']' ||
-                    pc == '"'    || pc == (unichar) 0x201D ||
-                    pc == '\''   || pc == (unichar) 0x2019)
-                    is_opening = false;
+        private bool md_write(GLib.File f) {
+            try {
+                Write.write_atomically(f.get_path(), _md_buffer.text.data);
+            } catch (Error e) {
+                toast(_("Could not save “%s”: %s").printf(f.get_basename(), e.message));
+                return false;
             }
-
-            string rep = (raw == '"')
-                ? (is_opening ? "\u201C" : "\u201D")
-                : (is_opening ? "\u2018" : "\u2019");
-
-            text_buffer.begin_user_action();
-            text_buffer.insert_at_cursor(rep, -1);
-            text_buffer.end_user_action();
+            current_file = f;
+            modified = false;
+            add_to_recent(f);
+            CloudActions.sync_back(main_window, f);
+            update_title();
             return true;
         }
 
-        // Ctrl+Backspace: delete word before cursor.
-
-        private void delete_word_backward() {
-            Gtk.TextIter cursor;
-            text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-            Gtk.TextIter ws = cursor;
-            if (!ws.is_start()) ws.backward_word_start();
-            if (ws.compare(cursor) < 0) {
-                text_buffer.begin_user_action();
-                text_buffer.delete(ref ws, ref cursor);
-                text_buffer.end_user_action();
-            }
+        private string base_name() {
+            GLib.File? f = in_rich() ? _rich.file : current_file;
+            string n;
+            if (f != null) n = f.get_basename();
+            else if (!in_rich()) n = _suggested_name != null ? _suggested_name : _("Untitled");
+            else if (_rich.doc.meta.title != "") n = _rich.doc.meta.title;
+            else n = first_line();
+            int dot = n.last_index_of_char('.');
+            if (f != null && dot > 0) n = n.substring(0, dot);
+            return n.replace("/", "-");
         }
 
-        // Ctrl+Delete: delete word after cursor.
-
-        private void delete_word_forward() {
-            Gtk.TextIter cursor;
-            text_buffer.get_iter_at_mark(out cursor, text_buffer.get_insert());
-            Gtk.TextIter we = cursor;
-            if (!we.is_end()) we.forward_word_end();
-            while (!we.is_end() && we.get_char() == ' ')
-                we.forward_char();
-            if (we.compare(cursor) > 0) {
-                text_buffer.begin_user_action();
-                text_buffer.delete(ref cursor, ref we);
-                text_buffer.end_user_action();
+        private string first_line() {
+            foreach (var b in _rich.doc.body.items) {
+                var p = b as Write.Paragraph;
+                if (p == null) continue;
+                string t = p.plain_text().strip();
+                if (t == "") continue;
+                if (t.char_count() > 60) t = t.substring(0, t.index_of_nth_char(60)).strip();
+                return t;
             }
+            return _("Untitled");
+        }
+
+        private void set_documents_folder(FileDialog fd) {
+            GLib.File? f = in_rich() ? _rich.file : current_file;
+            if (f != null && f.get_parent() != null) {
+                fd.initial_folder = f.get_parent();
+                return;
+            }
+            string? docs = Environment.get_user_special_dir(UserDirectory.DOCUMENTS);
+            if (docs == null || !FileUtils.test(docs, FileTest.IS_DIR)) docs = Environment.get_home_dir();
+            fd.initial_folder = GLib.File.new_for_path(docs);
+        }
+
+        private void on_save_as(owned Done? after, bool template = false) {
+            var fd = new FileDialog();
+            set_documents_folder(fd);
+            fd.title = template ? _("Save as Template") : _("Save Document");
+            var flist = new GLib.ListStore(typeof(FileFilter));
+            Write.FileFormat def;
+            if (in_markdown()) {
+                def = Write.FileFormat.MARKDOWN;
+                flist.append(WriteFiles.filter_for(Write.FileFormat.MARKDOWN));
+                flist.append(WriteFiles.filter_for(Write.FileFormat.TEXT));
+            } else {
+                def = template ? Write.FileFormat.DOTX : ((_rich.format.writable() && _rich.format.rich()) ? _rich.format : default_format());
+                Write.FileFormat[] kinds = template
+                    ? new Write.FileFormat[] { Write.FileFormat.DOTX, Write.FileFormat.OTT }
+                    : new Write.FileFormat[] { Write.FileFormat.DOCX, Write.FileFormat.ODT, Write.FileFormat.RTF, Write.FileFormat.DOTX, Write.FileFormat.OTT, Write.FileFormat.HTML, Write.FileFormat.EPUB, Write.FileFormat.MARKDOWN, Write.FileFormat.TEXT };
+                foreach (var k in kinds) flist.append(WriteFiles.filter_for(k));
+            }
+            fd.filters = flist;
+            fd.default_filter = (FileFilter) flist.get_item(0);
+            for (uint i = 0; i < flist.get_n_items(); i++) {
+                var ff = (FileFilter) flist.get_item(i);
+                if (ff.name == WriteFiles.format_filter_name(def)) fd.default_filter = ff;
+            }
+            fd.initial_name = base_name() + "." + def.extension();
+            fd.save.begin(main_window, null, (o, r) => {
+                GLib.File file;
+                try {
+                    file = fd.save.end(r);
+                } catch (Error e) {
+                    return;
+                }
+                string path = file.get_path();
+                var fmt = Write.FileFormat.from_extension(Path.get_basename(path));
+                if (in_markdown()) {
+                    if (fmt != Write.FileFormat.MARKDOWN && fmt != Write.FileFormat.TEXT) path += ".md";
+                    if (md_write(GLib.File.new_for_path(path)) && after != null) after();
+                    return;
+                }
+                if (!fmt.writable() || fmt == Write.FileFormat.PDF) {
+                    fmt = def;
+                    path += "." + def.extension();
+                }
+                if (!fmt.rich()) toast(_("Saved as %s. Page layout, comments and tracked changes are not kept in this format.").printf(fmt.label()));
+                if (template) {
+                    var f = GLib.File.new_for_path(path);
+                    try {
+                        Write.write_atomically(path, Write.Formats.save(_rich.doc, fmt));
+                        toast(_("Saved as template “%s”").printf(f.get_basename()));
+                        add_to_recent(f);
+                    } catch (Error e) {
+                        toast(e.message);
+                    }
+                    return;
+                }
+                if (rich_write(GLib.File.new_for_path(path), fmt) && after != null) after();
+            });
+        }
+
+        private void on_save_online() {
+            string name = base_name() + "." + (in_rich() ? ((_rich.format.writable() && _rich.format.rich()) ? _rich.format : default_format()).extension() : "md");
+            CloudActions.save.begin(main_window, name, (f) => {
+                try {
+                    if (in_rich()) Write.write_atomically(f.get_path(), Write.Formats.save(_rich.doc, Write.FileFormat.from_extension(name)));
+                    else Write.write_atomically(f.get_path(), _md_buffer.text.data);
+                } catch (Error e) {
+                    toast(e.message);
+                }
+            }, (f) => {
+                if (in_rich()) {
+                    _rich.file = f;
+                    _rich.format = Write.FileFormat.from_extension(name);
+                    _rich.modified = false;
+                } else {
+                    current_file = f;
+                    modified = false;
+                }
+                add_to_recent(f);
+                update_title();
+            });
+        }
+
+        private Write.Document? current_document() {
+            if (in_rich()) {
+                ChartSupport.prepare_all(_rich.doc);
+                return _rich.doc;
+            }
+            if (in_markdown() && _md_buffer != null) {
+                try {
+                    var d = Write.Formats.load(_md_buffer.text.data, Write.FileFormat.MARKDOWN);
+                    d.meta.title = base_name();
+                    return d;
+                } catch (Error e) {
+                    toast(e.message);
+                }
+            }
+            return null;
+        }
+
+        private void export_as(Write.FileFormat fmt) {
+            if (fmt == Write.FileFormat.UNKNOWN) return;
+            var doc = current_document();
+            if (doc == null) return;
+            var fd = new FileDialog();
+            set_documents_folder(fd);
+            fd.title = _("Export as %s").printf(fmt.label());
+            var flist = new GLib.ListStore(typeof(FileFilter));
+            var ff = new FileFilter();
+            ff.name = "%s (.%s)".printf(fmt.label(), fmt.extension());
+            ff.add_suffix(fmt.extension());
+            flist.append(ff);
+            fd.filters = flist;
+            fd.default_filter = ff;
+            fd.initial_name = base_name() + "." + fmt.extension();
+            fd.save.begin(main_window, null, (o, r) => {
+                GLib.File file;
+                try {
+                    file = fd.save.end(r);
+                } catch (Error e) {
+                    return;
+                }
+                string path = file.get_path();
+                if (!path.down().has_suffix("." + fmt.extension())) path += "." + fmt.extension();
+                try {
+                    if (fmt == Write.FileFormat.PDF) {
+                        var ex = new Write.PdfExport(doc);
+                        ex.filename = Path.get_basename(path);
+                        ex.write_file(path);
+                    } else if (fmt == Write.FileFormat.MARKDOWN && in_markdown()) {
+                        Write.write_atomically(path, _md_buffer.text.data);
+                    } else {
+                        Write.write_atomically(path, Write.Formats.save(doc, fmt));
+                    }
+                    toast(_("Exported “%s”").printf(Path.get_basename(path)));
+                } catch (Error e) {
+                    toast(_("Export failed: %s").printf(e.message));
+                }
+            });
+        }
+
+        private void on_print() {
+            if (in_rich()) {
+                _rich.fire_script_event("print");
+                _rich.update_fields();
+            }
+            var doc = current_document();
+            if (doc == null) return;
+            string title = in_rich() ? _rich.title() : base_name();
+            var src = new WritePageSource(doc, title);
+            src.filename = title;
+            if (in_rich()) {
+                src.with_markup = _rich.view.opts.markup != Write.ViewMarkup.FINAL;
+                if (_rich.ed.has_selection) {
+                    var sel = doc.copy();
+                    sel.body.items.clear();
+                    foreach (var b in _rich.ed.copy_selection().items) sel.body.add(b);
+                    src.selection_doc = sel;
+                    src.has_selection = true;
+                }
+            }
+            Singularity.Print.run_source.begin(main_window, src);
         }
 
         private void setup_styles() {
-            var provider = new Gtk.CssProvider();
-            provider.load_from_data(WRITE_CSS.data);
-            Gtk.StyleContext.add_provider_for_display(
-                Gdk.Display.get_default(), provider,
-                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+            add_app_css(WRITE_CSS);
         }
 
         private const string WRITE_CSS = """
-/* Ruler */
+.write-sidebar-actions button:checked {
+    background-color: alpha(@accent_color, 0.18);
+    color: @accent_color;
+}
+popover.context-menu.write-menu .menu-row.checked {
+    font-weight: 600;
+}
+popover.context-menu.write-menu button.write-swatch {
+    min-width: 0;
+    min-height: 0;
+    padding: 2px;
+    border-radius: 999px;
+}
+popover.context-menu.write-menu searchentry {
+    min-height: 30px;
+}
 .write-ruler {
-    background-color: @surface_bg;
-    border-top: 1px solid alpha(@text_color, 0.05);
-    border-bottom: 1px solid alpha(@text_color, 0.07);
+    border-bottom: 1px solid alpha(currentColor, 0.08);
+    min-height: 24px;
+}
+.write-docview {
+    background-color: @surface_mid;
+}
+.write-statusbar {
+    border-top: 1px solid alpha(currentColor, 0.08);
+    padding: 2px 10px;
+    min-height: 26px;
+}
+.write-statusbar button {
     min-height: 22px;
+    padding: 0 6px;
 }
-
-/* Page Canvas */
-.write-page-canvas {
-    background-color: @surface_mid;
+.write-sidebar-actions {
+    border-top: 1px solid alpha(currentColor, 0.08);
+    padding: 6px 10px;
 }
-.write-canvas-outer {
-    background-color: @surface_mid;
+.write-nav-sidebar .write-outline label {
     padding: 0;
 }
-.write-page {
-    background-color: @text_color;
-    color: @surface_dim;
-    border-radius: 2px;
-    box-shadow: 0 4px 32px alpha(@shadow_color, 0.6), 0 1px 4px alpha(@shadow_color, 0.4);
+.write-pane {
+    background-color: @surface_bg;
+    border-left: 1px solid alpha(@text_color, 0.07);
+    border-right: 1px solid alpha(@text_color, 0.07);
 }
-
-/* Document text view */
-.write-doc-text {
-    background-color: transparent;
-    color: @surface_dim;
-    font-size: 12pt;
-    font-family: "Liberation Serif", "Georgia", serif;
-    caret-color: @link_active_color;
-}
-.write-doc-text text {
-    background-color: transparent;
-    color: @surface_dim;
-}
-.write-doc-text selection {
-    background-color: alpha(@accent_color, 0.25);
-}
-
-/* Floating format bar */
-.write-format-bar {
-    background-color: @surface_raised;
-    border: 1px solid alpha(@text_color, 0.12);
+.write-comment-card {
     border-radius: 8px;
-    box-shadow: 0 4px 18px alpha(@shadow_color, 0.55);
+    padding: 8px 10px;
+    margin: 4px 8px;
+    background-color: alpha(@text_color, 0.04);
+    border-left: 3px solid #e0b020;
+}
+.write-comment-card.active {
+    background-color: alpha(#e0b020, 0.14);
+}
+.write-comment-card.resolved {
+    opacity: 0.6;
+}
+.write-comment-text {
+    font-size: 0.95em;
+}
+.write-comment-editor {
+    border-radius: 6px;
+    padding: 6px;
+}
+.write-page-thumb {
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px alpha(@shadow_color, 0.25), 0 1px 4px alpha(@shadow_color, 0.3);
+    background-color: white;
+}
+.write-check-context {
+    font-style: italic;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background-color: alpha(@text_color, 0.05);
+}
+button.write-symbol {
+    min-width: 34px;
+    min-height: 34px;
+    font-size: 1.3em;
     padding: 0;
 }
-.write-format-bar > * {
-    padding: 0;
+.write-chart-data, .write-props-custom {
+    border-radius: 6px;
+    padding: 6px;
+    background-color: alpha(@text_color, 0.05);
 }
-
-/* Find/Replace bar */
 .write-find-bar {
     background-color: transparent;
 }
@@ -2179,26 +2327,9 @@ namespace Singularity.Apps {
     border-top: 1px solid alpha(@text_color, 0.08);
     padding: 2px 0;
 }
-
-/* Outline sidebar */
-.write-sidebar {
-    background-color: @surface_bg;
-    border-right: 1px solid alpha(@text_color, 0.07);
-    min-width: 160px;
-}
-.write-outline-header {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: alpha(@fg_color, 0.45);
-}
 .write-outline-list button.write-outline-row {
-    border-radius: 4px;
-    margin: 1px 6px;
-    padding: 3px 8px;
-    font-size: 11px;
-    color: alpha(@fg_color, 0.75);
+    border-radius: 8px;
+    padding: 6px 10px;
 }
 .write-outline-list button.write-outline-row:hover {
     background-color: alpha(@text_color, 0.08);
@@ -2208,95 +2339,9 @@ namespace Singularity.Apps {
 .write-outline-h2 { font-weight: 600; }
 .write-outline-h3 { font-weight: 500; }
 .write-outline-h4 { font-weight: 400; }
-
-/* Style chooser */
-.style-chooser {
-    min-width: 120px;
-}
-.style-chooser-list {
-    padding: 4px 0;
-    min-width: 160px;
-}
-.style-chooser-list button.style-chooser-item {
-    border-radius: 4px;
-    margin: 1px 4px;
-    padding: 5px 10px;
-}
-.style-chooser-list button.style-item-h1 { font-size: 18px; font-weight: 700; }
-.style-chooser-list button.style-item-h2 { font-size: 15px; font-weight: 700; }
-.style-chooser-list button.style-item-h3 { font-size: 13px; font-weight: 600; }
-.style-chooser-list button.style-item-h4 { font-size: 12px; font-weight: 600; }
-.style-chooser-list button.style-item-quote { font-style: italic; color: alpha(@text_color, 0.6); }
-.style-chooser-list button.style-item-code  { font-family: monospace; font-size: 11px; }
-
-/* Color picker button */
-.color-picker-button {
-    padding: 3px;
-    min-width: 28px;
-    min-height: 28px;
-}
-
-/* Tables */
-.write-table {
-    border: 1px solid alpha(@shadow_color, 0.2);
-    margin: 4px 0;
-}
-.write-table-cell {
-    border: 1px solid alpha(@shadow_color, 0.15);
-    padding: 2px 4px;
-    min-width: 80px;
-    min-height: 28px;
-    background-color: @text_color;
-    color: @surface_dim;
-}
-.write-table-header {
-    background-color: #f0ece0;
-    font-weight: 600;
-}
-
-/* Images */
-.write-image {
-    display: block;
-    margin: 6px 0;
-}
-
-/* Footnotes */
-.write-footnote-anchor {
-    font-size: 9px;
-    padding: 0 2px;
-    min-height: 0;
-    vertical-align: super;
-    color: @link_active_color;
-}
-.write-footnote-editor {
-    background-color: @text_color;
-    color: @surface_dim;
-    font-size: 11px;
-    padding: 4px;
-}
-
-/* Write start page */
-.write-start-page {
-    background-color: @window_bg_color;
-}
-.write-start-card {
-    border-radius: 12px;
-    border: 1px solid alpha(@borders, 0.5);
-    background-color: alpha(@card_bg_color, 0.6);
-    transition: background-color 0.12s ease, border-color 0.12s ease;
-    min-width: 200px;
-}
-.write-start-card:hover {
-    background-color: @card_bg_color;
-    border-color: alpha(@accent_color, 0.5);
-}
-.write-start-card:active {
-    background-color: mix(@card_bg_color, @accent_color, 0.08);
-}
 .write-recent-list {
     border-radius: 10px;
     border: 1px solid alpha(@borders, 0.4);
-    overflow: hidden;
 }
 .write-recent-row {
     border-radius: 0;
@@ -2309,14 +2354,15 @@ namespace Singularity.Apps {
 .write-recent-row + .write-recent-row {
     border-top: 1px solid alpha(@borders, 0.3);
 }
-
-/* PDF reader tab strip. Edge-to-edge bar at the bottom of the viewer. */
-.write-pdf-tabs {
-    padding: 6px 10px;
-    background-color: alpha(@text_color, 0.04);
-    border-top: 1px solid alpha(@text_color, 0.10);
+.write-template-card {
+    padding: 6px;
+    border-radius: 12px;
 }
-
+.write-template-thumb {
+    border-radius: 6px;
+    background-color: @card_bg_color;
+    box-shadow: 0 0 0 1px alpha(@borders, 0.7), 0 1px 4px alpha(@shadow_color, 0.25);
+}
 """;
 
     }

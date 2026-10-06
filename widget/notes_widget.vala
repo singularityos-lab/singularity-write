@@ -5,11 +5,9 @@ using Singularity;
 namespace SingularityWriteWidget {
 
     /**
-     * Sticky-note widget. Backed by a single plain text file in ~/Documents
-     * (created on first save). Autosaves on every change (debounced).
-     *
-     * Widget code lives in libsingularity-write-widget.so loaded by the
-     * overview - no dependency on the write app running.
+     * Sticky-note widget. Each placed widget is one note of the shared
+     * notes store (Singularity.Notes), so it also shows up in Notes. The
+     * older plain text files in ~/Documents are imported once.
      */
     public class NotesProvider : Object, OverviewWidgetProvider {
         public string id           { get { return "write.notes"; } }
@@ -38,7 +36,11 @@ namespace SingularityWriteWidget {
     public class NotesInstance : Gtk.Box {
         private Gtk.TextView view;
         private Gtk.Label header;
-        private string note_path;
+        private string note_id;
+        private Singularity.Notes.NoteStore store;
+        private Singularity.Notes.Note? current = null;
+        private ulong changed_id = 0;
+        private bool loading = false;
         private uint save_id = 0;
 
         public NotesInstance(string instance_id, WidgetSize size) {
@@ -46,8 +48,11 @@ namespace SingularityWriteWidget {
             add_css_class("overview-notes");
             overflow = Overflow.HIDDEN;
 
-            note_path = Path.build_filename(Environment.get_home_dir(),
-                "Documents", "singularity-note-" + instance_id + ".txt");
+            store = Singularity.Notes.NoteStore.get_default();
+            note_id = Singularity.Notes.NoteStore.WIDGET_PREFIX + instance_id;
+            if (!Singularity.Notes.NoteStore.valid_id(note_id)) {
+                note_id = Singularity.Notes.NoteStore.WIDGET_PREFIX + GLib.Checksum.compute_for_string(ChecksumType.SHA1, instance_id).substring(0, 16);
+            }
 
             header = new Gtk.Label("Quick Notes");
             header.add_css_class("title-4");
@@ -69,13 +74,19 @@ namespace SingularityWriteWidget {
 
             load();
             view.buffer.changed.connect(schedule_save);
+            changed_id = store.changed.connect(() => {
+                if (save_id == 0) load();
+            });
             destroy.connect(() => {
+                if (changed_id != 0) store.disconnect(changed_id);
+                changed_id = 0;
                 if (save_id != 0) { GLib.Source.remove(save_id); save_id = 0; }
                 save_now();
             });
         }
 
         private void schedule_save() {
+            if (loading) return;
             if (save_id != 0) GLib.Source.remove(save_id);
             save_id = GLib.Timeout.add(800, () => {
                 save_id = 0;
@@ -85,21 +96,37 @@ namespace SingularityWriteWidget {
         }
 
         private void load() {
-            try {
-                if (FileUtils.test(note_path, FileTest.EXISTS)) {
-                    string contents;
-                    if (FileUtils.get_contents(note_path, out contents))
-                        view.buffer.text = contents;
-                }
-            } catch (Error e) { warning("notes load: %s", e.message); }
+            var note = store.lookup(note_id);
+            current = note != null ? note.copy() : null;
+            show_text(note != null ? note.body : "");
+        }
+
+        private void show_text(string body) {
+            if (view.buffer.text == body) return;
+            Gtk.TextIter it;
+            view.buffer.get_iter_at_mark(out it, view.buffer.get_insert());
+            int offset = it.get_offset();
+            loading = true;
+            view.buffer.text = body;
+            loading = false;
+            view.buffer.get_iter_at_offset(out it, int.min(offset, view.buffer.get_char_count()));
+            view.buffer.place_cursor(it);
         }
 
         private void save_now() {
+            string content = view.buffer.text;
             try {
-                var parent = File.new_for_path(note_path).get_parent();
-                if (parent != null && !parent.query_exists())
-                    parent.make_directory_with_parents();
-                FileUtils.set_contents(note_path, view.buffer.text);
+                if (content.strip() == "") {
+                    if (current != null && !store.remove_unchanged(current)) load();
+                    current = null;
+                    return;
+                }
+                var note = current ?? store.ensure(note_id).copy();
+                if (note.body == content) return;
+                note.body = content;
+                store.save(note);
+                current = note.copy();
+                show_text(note.body);
             } catch (Error e) { warning("notes save: %s", e.message); }
         }
     }

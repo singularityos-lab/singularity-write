@@ -8,12 +8,12 @@ namespace Markdown {
 
         // Wrap the HTML body in a full page with dark CSS for the WebView
 
-        public string to_full_html(string markdown) {
+        public string to_full_html(string markdown, string accent = "#3584e4", bool dark = true, int top = 60) {
             string body = to_html(markdown);
-            return """<!DOCTYPE html><html><head>
+            string html = """<!DOCTYPE html><html><head>
 <meta charset="UTF-8">
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:720px;margin:0 auto;padding:24px;padding-top:60px;color:#e8eaed;background:#1e1e2e;line-height:1.6}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:720px;margin:0 auto;padding:24px;padding-top:""" + top.to_string() + """px;color:#e8eaed;background:#1e1e2e;line-height:1.6}
 h1,h2,h3,h4,h5,h6{font-weight:700;margin-top:1.5em;margin-bottom:0.5em}
 h1{font-size:2em;border-bottom:1px solid rgba(255,255,255,.1);padding-bottom:.3em}
 h2{font-size:1.5em;border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:.2em}
@@ -23,7 +23,7 @@ code{background:rgba(255,255,255,.1);padding:2px 5px;border-radius:4px;font-fami
 pre{background:rgba(0,0,0,.3);padding:16px;border-radius:8px;overflow-x:auto}
 pre code{background:none;padding:0}
 blockquote{border-left:3px solid rgba(255,255,255,.2);margin:0;padding-left:16px;color:rgba(255,255,255,.6)}
-a{color:#7ec8e3}
+a{color:""" + accent + """}
 hr{border:none;border-top:1px solid rgba(255,255,255,.1);margin:1.5em 0}
 ul,ol{padding-left:24px}
 li{margin:.25em 0}
@@ -32,14 +32,152 @@ table{border-collapse:collapse;width:100%}
 th,td{border:1px solid rgba(255,255,255,.15);padding:8px 12px;text-align:left}
 th{background:rgba(255,255,255,.05)}
 del{opacity:.6}
+li.task{list-style:none;margin-left:-22px}
+li.task input{appearance:none;-webkit-appearance:none;width:15px;height:15px;margin:0 9px 0 0;vertical-align:-2px;border:1.5px solid rgba(255,255,255,.45);border-radius:4px;box-sizing:border-box}
+li.task input:checked{border-color:""" + accent + """;background:""" + accent + """ url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3.5 8.5l3 3 6-7' fill='none' stroke='white' stroke-width='2.2'/></svg>") center/12px no-repeat}
+dl.front-matter{display:grid;grid-template-columns:max-content 1fr;gap:4px 18px;margin:0 0 1.5em;padding:12px 16px;border-radius:8px;background:rgba(255,255,255,.05);font-size:.9em}
+dl.front-matter dt{font-weight:600;opacity:.65}
+dl.front-matter dd{margin:0}
+sup.fn a{text-decoration:none}
+section.footnotes{font-size:.9em;opacity:.85}
+section.footnotes ol{padding-left:20px}
 </style></head><body>""" + body + "</body></html>";
+            if (!dark) {
+                html = html.replace("color:#e8eaed;background:#1e1e2e", "color:#1f1f1f;background:#ffffff")
+                           .replace("rgba(255,255,255,", "rgba(0,0,0,")
+                           .replace("pre{background:rgba(0,0,0,.3)", "pre{background:rgba(0,0,0,.05)");
+            }
+            return html;
         }
+
+        private HashTable<string, int>? _slugs = null;
+        private HashTable<string, string>? _fn_defs = null;
+        private GenericArray<string>? _fn_order = null;
 
         public string to_html(string markdown) {
             string[] lines = markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n");
             var html_out = new StringBuilder();
-            process_blocks(lines, 0, lines.length, html_out);
+            _slugs = new HashTable<string, int>(str_hash, str_equal);
+            _fn_defs = new HashTable<string, string>(str_hash, str_equal);
+            _fn_order = new GenericArray<string>();
+            int start = parse_front_matter(lines, html_out);
+            string[] body = collect_footnotes(lines, start);
+            process_blocks(body, 0, body.length, html_out);
+            append_footnotes(html_out);
             return html_out.str;
+        }
+
+        private int parse_front_matter(string[] lines, StringBuilder sb) {
+            if (lines.length < 2 || lines[0].strip() != "---") return 0;
+            int close = -1;
+            for (int k = 1; k < lines.length; k++) {
+                string t = lines[k].strip();
+                if (t == "---" || t == "...") { close = k; break; }
+            }
+            if (close < 2) return 0;
+            string[] keys = {};
+            string[] values = {};
+            var re = /^([A-Za-z0-9_-]+):\s*(.*)$/;
+            for (int k = 1; k < close; k++) {
+                string raw = lines[k];
+                MatchInfo mi;
+                if (re.match(raw, 0, out mi)) {
+                    keys += mi.fetch(1);
+                    values += front_matter_value(mi.fetch(2));
+                } else if (raw.strip().has_prefix("- ") && values.length > 0) {
+                    string item = front_matter_value(raw.strip().substring(2));
+                    string prev = values[values.length - 1];
+                    values[values.length - 1] = prev == "" ? item : prev + ", " + item;
+                } else if (raw.strip() != "" && !raw.has_prefix(" ")) {
+                    return 0;
+                }
+            }
+            if (keys.length == 0) return 0;
+            sb.append("<dl class=\"front-matter\">\n");
+            for (int k = 0; k < keys.length; k++) {
+                sb.append("<dt>").append(Markup.escape_text(keys[k])).append("</dt><dd>")
+                  .append(Markup.escape_text(values[k])).append("</dd>\n");
+            }
+            sb.append("</dl>\n");
+            return close + 1;
+        }
+
+        private string front_matter_value(string raw) {
+            string v = raw.strip();
+            if (v.length >= 2 && ((v.has_prefix("\"") && v.has_suffix("\"")) || (v.has_prefix("'") && v.has_suffix("'"))))
+                v = v.substring(1, v.length - 2);
+            else if (v.has_prefix("[") && v.has_suffix("]")) {
+                string[] parts = v.substring(1, v.length - 2).split(",");
+                for (int k = 0; k < parts.length; k++) parts[k] = front_matter_value(parts[k]);
+                v = string.joinv(", ", parts);
+            }
+            return v;
+        }
+
+        private string[] collect_footnotes(string[] lines, int start) {
+            string[] kept = {};
+            var re = /^\[\^([^\]\s]+)\]:\s*(.*)$/;
+            bool in_fence = false;
+            string? last_id = null;
+            for (int k = start; k < lines.length; k++) {
+                string line = lines[k];
+                if (line.has_prefix("```") || line.has_prefix("~~~")) in_fence = !in_fence;
+                MatchInfo mi;
+                bool is_def = re.match(line, 0, out mi);
+                if (!in_fence && is_def) {
+                    last_id = mi.fetch(1);
+                    _fn_defs.insert(last_id, mi.fetch(2).strip());
+                    continue;
+                }
+                if (!in_fence && last_id != null && line.has_prefix("    ") && line.strip() != "") {
+                    _fn_defs.insert(last_id, _fn_defs.lookup(last_id) + " " + line.strip());
+                    continue;
+                }
+                last_id = null;
+                kept += line;
+            }
+            return kept;
+        }
+
+        private void append_footnotes(StringBuilder sb) {
+            if (_fn_order == null || _fn_order.length == 0) return;
+            sb.append("<section class=\"footnotes\">\n<hr>\n<ol>\n");
+            for (int k = 0; k < _fn_order.length; k++) {
+                sb.append("<li id=\"fn-%d\">".printf(k + 1))
+                  .append(inline_parse(_fn_defs.lookup(_fn_order[k])))
+                  .append("</li>\n");
+            }
+            sb.append("</ol>\n</section>\n");
+        }
+
+        private string heading_id(string text) {
+            var slug = new StringBuilder();
+            string plain = text.down();
+            int idx = 0;
+            unichar ch;
+            while (plain.get_next_char(ref idx, out ch)) {
+                if (ch.isalnum() || ch == '-' || ch == '_') slug.append_unichar(ch);
+                else if (ch == ' ') slug.append_c('-');
+            }
+            string id = slug.str;
+            if (_slugs == null) return id;
+            int seen = _slugs.contains(id) ? _slugs.lookup(id) : 0;
+            _slugs.insert(id, seen + 1);
+            return seen == 0 ? id : "%s-%d".printf(id, seen);
+        }
+
+        private string heading_open(int level, string text) {
+            return "<h%d id=\"%s\">".printf(level, Markup.escape_text(heading_id(text)));
+        }
+
+        private string list_item(string item) {
+            string t = item;
+            bool task = false, done = false;
+            if (t == "[ ]" || t.has_prefix("[ ] ")) { task = true; t = t.substring(3).strip(); }
+            else if (t == "[x]" || t == "[X]" || t.has_prefix("[x] ") || t.has_prefix("[X] ")) { task = true; done = true; t = t.substring(3).strip(); }
+            if (!task) return "<li>" + inline_parse(t) + "</li>\n";
+            return "<li class=\"task\"><input type=\"checkbox\" disabled%s>".printf(done ? " checked" : "")
+                   + inline_parse(t) + "</li>\n";
         }
 
         // ── Block processing ──────────────────────────────────────────────────
@@ -59,12 +197,12 @@ del{opacity:.6}
                 if (i + 1 < end_idx) {
                     string next = lines[i + 1];
                     if (is_setext_h1(next)) {
-                        sb.append("<h1>").append(inline_parse(line.strip())).append("</h1>\n");
+                        sb.append(heading_open(1, line.strip())).append(inline_parse(line.strip())).append("</h1>\n");
                         i += 2;
                         continue;
                     }
                     if (is_setext_h2(next)) {
-                        sb.append("<h2>").append(inline_parse(line.strip())).append("</h2>\n");
+                        sb.append(heading_open(2, line.strip())).append(inline_parse(line.strip())).append("</h2>\n");
                         i += 2;
                         continue;
                     }
@@ -78,7 +216,7 @@ del{opacity:.6}
                         string text = level < line.length ? line.substring(level + 1).strip() : "";
                         // Strip trailing '#' markers
                         while (text.has_suffix("#")) text = text[0:text.length - 1].strip();
-                        sb.append("<h%d>".printf(level))
+                        sb.append(heading_open(level, text))
                            .append(inline_parse(text))
                            .append("</h%d>\n".printf(level));
                         i++;
@@ -128,8 +266,7 @@ del{opacity:.6}
                     sb.append("<ul>\n");
                     while (i < end_idx && (is_ul_item(lines[i]) || is_continuation(lines[i]))) {
                         if (is_ul_item(lines[i])) {
-                            string item = lines[i].substring(2).strip();
-                            sb.append("<li>").append(inline_parse(item)).append("</li>\n");
+                            sb.append(list_item(lines[i].substring(2).strip()));
                         }
                         i++;
                     }
@@ -210,23 +347,23 @@ del{opacity:.6}
 
                 // Paragraph: collect lines until blank line or block-level start
                 var para = new StringBuilder();
+                string[] segments = {};
                 while (i < end_idx && lines[i].strip() != "" && !is_block_start(lines[i])) {
                     string pline = lines[i];
-                    if (para.len > 0) {
-                        if (pline.has_suffix("  ") || pline.has_suffix("\t")) {
-                            sb.append("<p>").append(inline_parse(para.str)).append("</p>\n");
-                            sb.append("<br>\n");
-                            para.truncate(0);
-                        } else {
-                            para.append_c(' ');
-                        }
+                    string stripped = pline.strip();
+                    bool slash_break = stripped.has_suffix("\\") && !stripped.has_suffix("\\\\");
+                    if (slash_break) stripped = stripped.substring(0, stripped.length - 1).strip();
+                    if (para.len > 0) para.append_c(' ');
+                    para.append(stripped);
+                    if (slash_break || pline.has_suffix("  ") || pline.has_suffix("\t")) {
+                        segments += inline_parse(para.str);
+                        para.truncate(0);
                     }
-                    // Strip trailing whitespace used for hard break marker
-                    para.append(pline.strip());
                     i++;
                 }
-                if (para.len > 0)
-                    sb.append("<p>").append(inline_parse(para.str)).append("</p>\n");
+                if (para.len > 0) segments += inline_parse(para.str);
+                if (segments.length > 0)
+                    sb.append("<p>").append(string.joinv("<br>\n", segments)).append("</p>\n");
             }
         }
 
@@ -374,6 +511,21 @@ del{opacity:.6}
                                .append("\" alt=\"").append(Markup.escape_text(alt))
                                .append("\">");
                             i = cp + 1;
+                            continue;
+                        }
+                    }
+                }
+
+                if (c == '[' && i + 1 < n && text[i + 1] == '^' && _fn_defs != null) {
+                    int cb = text.index_of("]", i + 2);
+                    if (cb > i + 2) {
+                        string fid = text.substring(i + 2, cb - i - 2);
+                        if (_fn_defs.contains(fid)) {
+                            int num = -1;
+                            for (int k = 0; k < _fn_order.length; k++) if (_fn_order[k] == fid) num = k + 1;
+                            if (num < 0) { _fn_order.add(fid); num = _fn_order.length; }
+                            html_out.append("<sup class=\"fn\"><a href=\"#fn-%d\">%d</a></sup>".printf(num, num));
+                            i = cb + 1;
                             continue;
                         }
                     }

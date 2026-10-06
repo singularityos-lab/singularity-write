@@ -16,6 +16,9 @@ namespace Singularity.Apps {
             Object(application: app);
             set_title(_("Write"));
             set_default_size(1140, 860);
+            var close_act = new SimpleAction("close", null);
+            close_act.activate.connect(() => close());
+            add_action(close_act);
         }
     }
 }

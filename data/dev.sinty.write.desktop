@@ -7,5 +7,19 @@ Icon=dev.sinty.write
 Terminal=false
 Type=Application
 Categories=Office;WordProcessor;
-MimeType=application/vnd.oasis.opendocument.text;application/vnd.oasis.opendocument.spreadsheet;application/vnd.oasis.opendocument.presentation;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/msword;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.ms-excel;application/vnd.openxmlformats-officedocument.presentationml.presentation;application/vnd.ms-powerpoint;application/rtf;text/rtf;application/epub+zip;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.openxmlformats-officedocument.wordprocessingml.template;application/vnd.ms-word.document.macroEnabled.12;application/vnd.oasis.opendocument.text;application/vnd.oasis.opendocument.text-template;application/rtf;text/rtf;application/msword;application/epub+zip;text/html;text/markdown;text/x-markdown;text/plain;
 StartupWMClass=dev.sinty.write
+Actions=new-document;new-note;new-from-template;
+X-Singularity-Dock-Recent=true
+
+[Desktop Action new-document]
+Name=New Document
+Exec=singularity-write --new-document
+
+[Desktop Action new-note]
+Name=New Note
+Exec=singularity-write --new-note
+
+[Desktop Action new-from-template]
+Name=New from Template
+Exec=singularity-write --new-from-template
