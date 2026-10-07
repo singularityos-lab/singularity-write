@@ -709,6 +709,42 @@ namespace Singularity.Apps {
             }
         }
 
+        public async void update_linked_charts() {
+            int updated = 0, failed = 0;
+            string last_error = "";
+            foreach (var p in Story.paragraphs(doc.body)) {
+                foreach (var it in p.inlines) {
+                    var ch = it as ChartRun;
+                    if (ch == null || !ch.title.has_prefix(ChartSupport.LINK_PREFIX)) continue;
+                    string[] parts = ch.title.substring(ChartSupport.LINK_PREFIX.length).split("\t");
+                    if (parts.length < 3) continue;
+                    try {
+                        var bus = yield GLib.Bus.get(BusType.SESSION);
+                        var reply = yield bus.call("dev.sinty.spreadsheet", "/dev/sinty/spreadsheet/Charts", "dev.sinty.Spreadsheet1", "ChartXml",
+                            new Variant("(sss)", parts[0], parts[1], parts[2]), new VariantType("(s)"), DBusCallFlags.NONE, 30000, null);
+                        var spec = Singularity.Charts.DrawingML.read_chart(reply.get_child_value(0).get_string());
+                        if (spec == null) throw new IOError.INVALID_DATA(_("The chart could not be read"));
+                        if (updated + failed == 0) ed.checkpoint(_("Update Linked Charts"));
+                        ChartSupport.apply(ch, spec);
+                        p.touch();
+                        updated++;
+                    } catch (Error e) {
+                        failed++;
+                        if (e is DBusError.SERVICE_UNKNOWN) {
+                            last_error = _("Spreadsheet is not available");
+                        } else {
+                            DBusError.strip_remote_error(e);
+                            last_error = e.message;
+                        }
+                    }
+                }
+            }
+            if (updated > 0) ed.changed();
+            if (updated + failed == 0) toast(_("This document has no linked charts"));
+            else if (failed == 0) toast(ngettext("%d linked chart updated", "%d linked charts updated", updated).printf(updated));
+            else toast(_("%d updated, %d could not be updated: %s").printf(updated, failed, last_error));
+        }
+
         public Paragraph? find_para_of(Inline item) {
             foreach (var p in Story.all(doc)) if (p.inlines.contains(item)) return p;
             return null;
@@ -1083,8 +1119,8 @@ namespace Singularity.Apps {
             var formats = cb.get_formats();
             string[] prefer;
             if (mode == "text") prefer = { "text/plain;charset=utf-8", "text/plain" };
-            else if (mode == "picture") prefer = { "image/png", "image/jpeg" };
-            else prefer = { "application/x-singularity-write", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/html", "text/rtf", "image/png", "image/jpeg", "text/plain;charset=utf-8", "text/plain" };
+            else if (mode == "picture") prefer = { "image/svg+xml", "image/png", "image/jpeg" };
+            else prefer = { "application/x-singularity-chart-link", "application/x-singularity-write", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/html", "text/rtf", "image/svg+xml", "image/png", "image/jpeg", "text/plain;charset=utf-8", "text/plain" };
             string? chosen = null;
             foreach (string m in prefer) if (formats.contain_mime_type(m)) {
                 chosen = m;
@@ -1108,6 +1144,22 @@ namespace Singularity.Apps {
                 yield mem.splice_async(stream, OutputStreamSpliceFlags.CLOSE_SOURCE | OutputStreamSpliceFlags.CLOSE_TARGET, Priority.DEFAULT, null);
                 var data = mem.steal_as_bytes();
                 ed.checkpoint(_("Paste"));
+                if (chosen == "application/x-singularity-chart-link") {
+                    var sb = new StringBuilder();
+                    sb.append_len((string) data.get_data(), (ssize_t) data.get_size());
+                    string text = sb.str;
+                    int nl = text.index_of_char('\n');
+                    if (nl > 0) {
+                        var spec = Singularity.Charts.DrawingML.read_chart(text.substring(nl + 1));
+                        if (spec != null) {
+                            var ch = new ChartRun();
+                            ChartSupport.apply(ch, spec);
+                            ch.title = ChartSupport.LINK_PREFIX + text.substring(0, nl);
+                            ed.insert_inline(ch);
+                            return;
+                        }
+                    }
+                }
                 if (chosen.has_prefix("image/")) {
                     var img = new ImageRun(data, ImageRun.sniff(data.get_data()));
                     int w, h;

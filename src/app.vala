@@ -473,6 +473,7 @@ namespace Singularity.Apps {
                 { _("Text Box"), "app.doc-textbox" },
                 { _("WordArt…"), "app.doc-wordart" },
                 { _("Chart…"), "app.doc-chart" },
+                { _("Update Linked Charts"), "app.doc-update-charts" },
                 { _("Equation"), "app.doc-equation" },
                 { _("Inline Equation"), "app.doc-equation-inline" },
                 { _("Equation Gallery\u2026"), "app.doc-equation-gallery" },

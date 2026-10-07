@@ -2057,7 +2057,7 @@ namespace Singularity.Apps {
             fd.title = _("Select Recipients");
             var ff = new Gtk.FileFilter();
             ff.name = _("Recipient lists (CSV, TSV, vCard, JSON)");
-            foreach (string s in new string[] { "csv", "tsv", "tab", "txt", "vcf", "vcard", "json" }) ff.add_suffix(s);
+            foreach (string s in new string[] { "csv", "tsv", "tab", "txt", "vcf", "vcard", "json", "sqlite", "sqlite3", "db" }) ff.add_suffix(s);
             var fl = new GLib.ListStore(typeof(Gtk.FileFilter));
             fl.append(ff);
             fd.filters = fl;
@@ -3093,6 +3093,14 @@ namespace Singularity.Apps {
                 grid.attach(b, i % 8, i / 8);
             }
             m.add_widget(grid);
+            var recent = new Singularity.Widgets.RecentColorsRow(8);
+            recent.margin_start = 6;
+            recent.margin_end = 6;
+            recent.picked.connect((c) => {
+                m.popdown();
+                r.run(highlight ? "highlight" : "text-color", new Variant.string(c));
+            });
+            m.add_widget(recent);
             m.add_separator();
             m.add_item(highlight ? _("No Highlight") : _("Automatic"), null, () => {
                 r.run(highlight ? "highlight" : "text-color", new Variant.string(highlight ? "none" : "auto"));
@@ -3333,6 +3341,8 @@ namespace Singularity.Apps {
     }
 
     public class ChartSupport : Object {
+        public const string LINK_PREFIX = "sinty-chart-link:";
+
         public static Singularity.Charts.ChartSpec? spec_of(Write.ChartRun ch) {
             Singularity.Charts.ChartSpec? spec = null;
             if (ch.chart_xml != "") spec = Singularity.Charts.DrawingML.read_chart(ch.chart_xml);

@@ -6,6 +6,12 @@ namespace Write {
         public string path = "";
 
         public static DataSource load(string path) throws Error {
+            string low = path.down();
+            if (low.has_suffix(".sqlite") || low.has_suffix(".sqlite3") || low.has_suffix(".db")) {
+                var db_source = from_sqlite(path);
+                db_source.path = path;
+                return db_source;
+            }
             string text;
             FileUtils.get_contents(path, out text);
             text = Formats.decode_text(text.data);
@@ -15,6 +21,37 @@ namespace Write {
             else if (lp.has_suffix(".json")) ds = from_json(text);
             else ds = from_delimited(text, lp.has_suffix(".tsv") || lp.has_suffix(".tab") ? '\t' : guess_delim(text));
             ds.path = path;
+            return ds;
+        }
+
+        public static DataSource from_sqlite(string path) throws Error {
+            Sqlite.Database db;
+            if (Sqlite.Database.open_v2(path, out db, Sqlite.OPEN_READONLY) != Sqlite.OK) throw new IOError.FAILED(_("The database could not be opened"));
+            Sqlite.Statement tables;
+            db.prepare_v2("SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name", -1, out tables);
+            string? best = null;
+            int64 best_rows = -1;
+            while (tables.step() == Sqlite.ROW) {
+                string name = tables.column_text(0);
+                Sqlite.Statement count;
+                if (db.prepare_v2("SELECT count(*) FROM \"%s\"".printf(name.replace("\"", "\"\"")), -1, out count) != Sqlite.OK) continue;
+                if (count.step() == Sqlite.ROW && count.column_int64(0) > best_rows) {
+                    best_rows = count.column_int64(0);
+                    best = name;
+                }
+            }
+            if (best == null) throw new IOError.FAILED(_("The database has no tables"));
+            var ds = new DataSource();
+            Sqlite.Statement rows;
+            if (db.prepare_v2("SELECT * FROM \"%s\"".printf(best.replace("\"", "\"\"")), -1, out rows) != Sqlite.OK) throw new IOError.FAILED(db.errmsg());
+            string[] cols = {};
+            for (int c = 0; c < rows.column_count(); c++) cols += rows.column_name(c);
+            ds.columns = cols;
+            while (rows.step() == Sqlite.ROW) {
+                var rec = new Gee.HashMap<string, string>();
+                for (int c = 0; c < rows.column_count(); c++) rec[ds.columns[c]] = rows.column_text(c) ?? "";
+                ds.records.add(rec);
+            }
             return ds;
         }
 

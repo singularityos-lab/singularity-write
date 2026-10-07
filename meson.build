@@ -74,7 +74,7 @@ poppler_dep = dependency('poppler-glib')
 json_dep = dependency('json-glib-1.0')
 soup_dep = dependency('libsoup-3.0')
 gst_dep = dependency('gstreamer-1.0')
-engine_deps = [gtk_dep, gee_dep, gio_dep, xml_dep, zlib_dep, math_dep, pangocairo_dep, json_dep]
+engine_deps = [gtk_dep, gee_dep, gio_dep, xml_dep, zlib_dep, math_dep, pangocairo_dep, json_dep, dependency('sqlite3')]
 engine_args = ['--pkg', 'zlib']
 
 sources = files(

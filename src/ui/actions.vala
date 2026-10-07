@@ -22,7 +22,7 @@ namespace Singularity.Apps {
                 "table-op", "table-sort", "table-formula", "table-properties", "table-style", "text-to-table", "table-to-text",
                 "macro-record", "macro-run", "macros", "autocorrect", "update-fields", "update-toc", "navigation", "ruler", "marks", "view",
                 "zoom", "zoom-in", "zoom-out", "undo", "redo", "cut", "copy", "paste", "paste-text", "paste-special", "select-all", "find",
-                "find-replace", "goto", "format-painter", "properties", "versions", "insert-file", "comment-reply", "chart", "reveal-formatting", "equation-gallery", "translate", "dictate", "live-share", "live-stop", "run-script", "script-new", "live-host", "live-join", "live-folder-start", "live-folder-join"
+                "find-replace", "goto", "format-painter", "properties", "versions", "insert-file", "comment-reply", "chart", "update-charts", "reveal-formatting", "equation-gallery", "translate", "dictate", "live-share", "live-stop", "run-script", "script-new", "live-host", "live-join", "live-folder-start", "live-folder-join"
             };
         }
 
@@ -439,6 +439,9 @@ namespace Singularity.Apps {
                     break;
                 case "chart":
                     WriteDialogs.chart(r);
+                    break;
+                case "update-charts":
+                    r.update_linked_charts.begin();
                     break;
                 case "equation":
                     r.insert_equation.begin(true);

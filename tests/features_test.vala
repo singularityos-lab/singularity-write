@@ -230,6 +230,14 @@ void test_merge() {
         FileUtils.set_contents(scratch("merge.vcf"), "BEGIN:VCARD\nVERSION:3.0\nFN:Linus T\nN:T;Linus;;;\nEMAIL:l@example.org\nADR:;;Main St 1;Town;;12345;FI\nEND:VCARD\n");
         var vc = DataSource.load(scratch("merge.vcf"));
         check(vc.records.size == 1 && vc.records[0]["City"] == "Town" && vc.records[0]["FirstName"] == "Linus", "vcard source");
+        FileUtils.unlink(scratch("merge.sqlite"));
+        Sqlite.Database sdb;
+        Sqlite.Database.open(scratch("merge.sqlite"), out sdb);
+        sdb.exec("CREATE TABLE Notes(x TEXT); CREATE TABLE Customers(First TEXT, Amount TEXT); INSERT INTO Customers VALUES('Bianchi Design','40'),('Casa Verde','15');");
+        var sq = DataSource.load(scratch("merge.sqlite"));
+        check(sq.records.size == 2 && sq.columns.length == 2 && sq.records[1]["First"] == "Casa Verde", "sqlite source picks the table with rows");
+        var sq_merged = MailMerge.merge_all(d, sq).paragraphs(false);
+        check(sq_merged.size == 2 && sq_merged[0].plain_text() == "Dear Bianchi Design, you owe EUR 40", "merge from sqlite (%s)".printf(sq_merged[0].plain_text()));
         var tmpl = new BlockList();
         var lp = new Paragraph("NoSpacing");
         lp.inlines.add(new FieldRun("MERGEFIELD Name", ""));
