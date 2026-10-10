@@ -991,7 +991,7 @@ namespace Singularity.Apps {
                 bar.append(ign_all);
                 var add = new Button.with_label(_("Add to Dictionary"));
                 add.clicked.connect(() => {
-                    Singularity.Text.SpellChecker.get_default().add_to_dictionary(word);
+                    r.view.spell_checker_at(new Pos(is.para, is.start)).add_to_dictionary(word);
                     r.view.refresh_spelling();
                     index++;
                     show_issue();

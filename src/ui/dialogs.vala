@@ -1955,6 +1955,9 @@ namespace Singularity.Apps {
                 r.view.doc_lang = r.doc.lang;
                 r.view.refresh_spelling();
                 r.ed.changed();
+                if (!nocheck.active && !Singularity.Text.SpellChecker.for_language(code).available) {
+                    r.toast(_("No spelling dictionary is installed for %s.").printf(names[lang.selected]));
+                }
             });
             dlg.present();
         }
@@ -2956,12 +2959,51 @@ namespace Singularity.Apps {
             dlg.present();
         }
 
+        private static void live_people(WriteRichEditor r, Gtk.Box box, Singularity.Widgets.AppDialog dlg, bool inviting) {
+            if (!Singularity.Collab.Client.installed()) return;
+            var client = Singularity.Collab.Client.get_default();
+            var g = new PreferencesGroup(inviting ? _("Invite More People") : _("People Nearby"),
+                _("They are asked to accept, then they write with you in real time."));
+            box.prepend(g);
+            client.refresh_people.begin((o, res) => {
+                client.refresh_people.end(res);
+                int shown = 0;
+                foreach (var p in client.people) {
+                    if (!p.can_join) continue;
+                    var person = p;
+                    var row = new ActionRow(p.name, p.provider_name, p.icon_name);
+                    row.activatable = true;
+                    row.activated.connect(() => {
+                        dlg.close();
+                        string title = r.window != null && r.window.title != null && r.window.title != "" ? r.window.title : _("Document");
+                        r.start_live_collab.begin(person, title, (obj, ar) => {
+                            try {
+                                r.start_live_collab.end(ar);
+                                r.toast(_("Invitation sent to %s.").printf(person.name));
+                            } catch (Error e) {
+                                r.toast(e.message);
+                            }
+                        });
+                    });
+                    g.add_row(row);
+                    shown++;
+                }
+                if (shown == 0) {
+                    var none = new ActionRow(_("Nobody Is Reachable"), _("Pair a computer in Settings, Connected Devices"), "network-offline-symbolic");
+                    none.activatable = false;
+                    g.add_row(none);
+                }
+            });
+        }
+
         public static void live_share(WriteRichEditor r) {
             var dlg = make(r, _("Edit Together"), 480, 560);
             var box = body(dlg);
             if (r.live != null) {
                 var g = new PreferencesGroup(r.live.mode == WriteLiveSession.Mode.FOLDER ? _("Shared through a folder") : _("Live session"));
-                if (r.live.mode == WriteLiveSession.Mode.HOST) {
+                if (r.live.mode == WriteLiveSession.Mode.COLLAB) {
+                    g.add_row(new ActionRow(_("Shared with People Nearby"), r.live.collab_hosting ? _("You started this session") : _("You joined this session")));
+                } else if (r.live.mode == WriteLiveSession.Mode.HOST) {
                     var link = entry_row(g, _("Link"), r.live.link);
                     var copy = new Button.from_icon_name("edit-copy-symbolic");
                     copy.valign = Gtk.Align.CENTER;
@@ -2981,9 +3023,11 @@ namespace Singularity.Apps {
                 foreach (var p in r.live.peers.values) pg.add_row(new ActionRow(p.name, p.color));
                 box.append(pg);
                 footer(dlg, _("Stop Sharing"), () => r.stop_live());
+                if (r.live.mode == WriteLiveSession.Mode.COLLAB && r.live.collab_hosting) live_people(r, box, dlg, true);
                 dlg.present();
                 return;
             }
+            live_people(r, box, dlg, false);
             var hg = new PreferencesGroup(_("On this network"), _("Others join with the link and its key. Changes merge paragraph by paragraph, and everyone sees each other's cursor."));
             var start = new ActionRow(_("Start a live session"), _("Creates a link to share"));
             start.activated.connect(() => {

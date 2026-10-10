@@ -18,7 +18,8 @@ namespace Singularity.Apps {
         public enum Mode {
             HOST,
             GUEST,
-            FOLDER
+            FOLDER,
+            COLLAB
         }
 
         public Mode mode = Mode.HOST;
@@ -39,6 +40,12 @@ namespace Singularity.Apps {
         private int seq = 0;
         private Gee.HashSet<string> processed = new Gee.HashSet<string>();
         private Json.Object? my_presence = null;
+        public string collab_session = "";
+        public bool collab_hosting = false;
+        private ulong collab_raw_id = 0;
+        private ulong collab_joined_id = 0;
+        private ulong collab_ended_id = 0;
+        private int collab_sent = 0;
 
         public WriteLiveSession(string name) {
             this.name = name;
@@ -343,11 +350,69 @@ namespace Singularity.Apps {
             }
         }
 
+        private void collab_wire(string session) {
+            collab_session = session;
+            var client = Singularity.Collab.Client.get_default();
+            collab_raw_id = client.raw.connect((sid, author, data) => {
+                if (sid != collab_session) return;
+                var o = decode_text(data);
+                if (o != null) handle(o, null);
+            });
+            collab_joined_id = client.joined.connect((sid, who) => {
+                if (sid != collab_session || !collab_hosting) return;
+                state_requested();
+                if (current_state != null) client.update_snapshot.begin(collab_session, encode(current_state.to_json()));
+                if (my_presence != null) client.send_raw(collab_session, encode(my_presence));
+            });
+            collab_ended_id = client.ended.connect((sid) => {
+                if (sid != collab_session) return;
+                collab_unwire();
+                ended(_("The live session ended."));
+            });
+        }
+
+        private void collab_unwire() {
+            var client = Singularity.Collab.Client.get_default();
+            if (collab_raw_id != 0) client.disconnect(collab_raw_id);
+            if (collab_joined_id != 0) client.disconnect(collab_joined_id);
+            if (collab_ended_id != 0) client.disconnect(collab_ended_id);
+            collab_raw_id = collab_joined_id = collab_ended_id = 0;
+            collab_session = "";
+        }
+
+        public async void host_collab(Write.LivePacket state, Singularity.Collab.Person person, string title) throws Error {
+            current_state = state;
+            var client = Singularity.Collab.Client.get_default();
+            if (mode == Mode.COLLAB && collab_session != "") {
+                yield client.invite(collab_session, person.id);
+                return;
+            }
+            string sid = yield client.share(person.id, "Document", title, encode(state.to_json()));
+            mode = Mode.COLLAB;
+            collab_hosting = true;
+            link = "";
+            collab_wire(sid);
+        }
+
+        public void join_collab(string session, string snapshot) {
+            mode = Mode.COLLAB;
+            collab_hosting = false;
+            collab_wire(session);
+            var o = decode_text(snapshot);
+            if (o != null) packet(Write.LivePacket.from_json(o));
+            if (my_presence != null) Singularity.Collab.Client.get_default().send_raw(collab_session, encode(my_presence));
+        }
+
         public void send(Write.LivePacket p) {
             p.peer = my_id;
             p.who = name;
             var o = p.to_json();
             switch (mode) {
+                case Mode.COLLAB:
+                    if (collab_session == "") break;
+                    Singularity.Collab.Client.get_default().send_raw(collab_session, encode(o));
+                    if (collab_hosting && ++collab_sent % 200 == 0) state_requested();
+                    break;
                 case Mode.HOST:
                     broadcast(o, null);
                     break;
@@ -365,6 +430,9 @@ namespace Singularity.Apps {
 
         public void publish_state(Write.LivePacket state) {
             current_state = state;
+            if (mode == Mode.COLLAB && collab_hosting && collab_session != "") {
+                Singularity.Collab.Client.get_default().update_snapshot.begin(collab_session, encode(state.to_json()));
+            }
             if (mode == Mode.FOLDER) {
                 string n = "state-%s-%s.json".printf(stamp(), my_id);
                 processed.add(n);
@@ -376,6 +444,9 @@ namespace Singularity.Apps {
             var o = presence_json(my_id, name, color, focus, anchor);
             my_presence = o;
             switch (mode) {
+                case Mode.COLLAB:
+                    if (collab_session != "") Singularity.Collab.Client.get_default().send_raw(collab_session, encode(o));
+                    break;
                 case Mode.HOST:
                     broadcast(o, null);
                     break;
@@ -389,6 +460,16 @@ namespace Singularity.Apps {
         }
 
         public void leave() {
+            if (mode == Mode.COLLAB && collab_session != "") {
+                var bye = new Json.Object();
+                bye.set_string_member("t", "bye");
+                bye.set_string_member("id", my_id);
+                var client = Singularity.Collab.Client.get_default();
+                client.send_raw(collab_session, encode(bye));
+                string sid = collab_session;
+                collab_unwire();
+                client.leave.begin(sid);
+            }
             if (poll_id != 0) {
                 Source.remove(poll_id);
                 poll_id = 0;

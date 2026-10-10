@@ -81,6 +81,7 @@ sources = files(
   'src/main.vala',
   'src/window.vala',
   'src/app.vala',
+  'src/collab_bus.vala',
   'src/cloud_actions.vala',
   'src/formula_bridge.vala',
   'src/search_provider.vala',
@@ -141,6 +142,13 @@ foreach t : ['docx', 'odt', 'formats', 'layout', 'features']
   test(t, exe, env: ['WRITE_FIXTURES=' + meson.current_source_dir() / 'tests' / 'fixtures', 'TMPDIR=' + meson.current_build_dir()])
 endforeach
 
+proofing_test = executable('write-proofing-test',
+  engine + files('src/ui/doc_view.vala', 'tests/harness.vala', 'tests/proofing_test.vala'),
+  dependencies: engine_deps + [poppler_dep, libsingularity_dep],
+  vala_args: engine_args,
+)
+test('proofing', proofing_test, env: ['GSETTINGS_BACKEND=memory'])
+
 install_data('data/dev.sinty.write.desktop',
   install_dir: get_option('datadir') / 'applications'
 )
@@ -153,3 +161,6 @@ install_data('data/dev.sinty.write.json',
 install_data('data/icons/dev.sinty.write.svg',
   install_dir: get_option('datadir') / 'icons' / 'hicolor' / 'scalable' / 'apps'
 )
+
+install_data('data/capabilities/dev.sinty.Collab.Document1.ini',
+  install_dir: get_option('datadir') / 'singularity' / 'capabilities')

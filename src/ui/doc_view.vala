@@ -200,6 +200,7 @@ namespace Singularity.Apps {
 
         public void set_document(Write.Document d, Write.Editor e) {
             doc = d;
+            doc_lang = "";
             ed = e;
             engine = new Write.LayoutEngine(d, opts);
             engine.filename = filename;
@@ -944,7 +945,7 @@ namespace Singularity.Apps {
 
         private void ensure_spell(Paragraph p) {
             var sc = spell[p];
-            string lang = doc_lang != "" ? doc_lang : (doc.lang != "" ? doc.lang : Write.Hyphenator.default_lang());
+            string lang = proofing_language();
             if (sc != null && sc.version == p.version && sc.lang == lang) return;
             sc = new SpellCache();
             sc.version = p.version;
@@ -954,7 +955,7 @@ namespace Singularity.Apps {
             string t = p.text();
             if (spell_enabled) {
                 var checker = Singularity.Text.SpellChecker.get_default();
-                if (checker.available && checker.enabled) {
+                if (checker.enabled) {
                     int ci = 0;
                     int ws = -1;
                     var word = new StringBuilder();
@@ -968,7 +969,7 @@ namespace Singularity.Apps {
                         } else if (ws >= 0) {
                             string w = word.str;
                             while (w.has_suffix("'")) w = w.substring(0, w.length - 1);
-                            if (w.char_count() > 1 && !ignored.contains(w) && !is_link_at(p, ws) && !checker.check(w)) {
+                            if (w.char_count() > 1 && !ignored.contains(w) && !is_link_at(p, ws) && !spell_checker_at(new Pos(p, ws)).check(w)) {
                                 var r = new SpellRange();
                                 r.start = ws;
                                 r.end = ws + w.char_count();
@@ -999,6 +1000,17 @@ namespace Singularity.Apps {
             return it != null && it.props.link != null;
         }
 
+        private string proofing_language() {
+            if (doc_lang != "") return doc_lang;
+            if (doc.lang != "") return doc.lang;
+            return Write.Hyphenator.default_lang();
+        }
+
+        public Singularity.Text.SpellChecker spell_checker_at(Pos p) {
+            string? lang = p.para.inline_at(p.offset)?.props.lang;
+            return Singularity.Text.SpellChecker.for_language(lang != null && lang != "" ? lang : proofing_language());
+        }
+
         public Gee.HashSet<string> ignored = new Gee.HashSet<string>();
 
         public void refresh_spelling() {
@@ -1025,7 +1037,7 @@ namespace Singularity.Apps {
                     else if (with_spelling) {
                         string word = usub(p.text(), r.start, r.end);
                         var issue = new Write.Issue(p, r.start, r.end, "spelling", _("Not in dictionary: \u201c%s\u201d").printf(word));
-                        issue.suggestions = Singularity.Text.SpellChecker.get_default().suggest(word, 6);
+                        issue.suggestions = spell_checker_at(new Pos(p, r.start)).suggest(word, 6);
                         list.add(issue);
                     }
                 }

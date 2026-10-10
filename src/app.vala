@@ -94,6 +94,30 @@ namespace Singularity.Apps {
             main_window.close_request.connect(on_close_request);
         }
 
+        private uint collab_bus_id = 0;
+
+        public override bool dbus_register(DBusConnection connection, string object_path) throws Error {
+            if (!base.dbus_register(connection, object_path)) return false;
+            collab_bus_id = connection.register_object("/dev/sinty/write/Collab", new WriteCollabBus(this));
+            return true;
+        }
+
+        public override void dbus_unregister(DBusConnection connection, string object_path) {
+            if (collab_bus_id != 0) connection.unregister_object(collab_bus_id);
+            collab_bus_id = 0;
+            base.dbus_unregister(connection, object_path);
+        }
+
+        public void join_collab(string session, string snapshot, string from) {
+            hold();
+            if (main_window == null) build_window();
+            new_document();
+            main_window.present();
+            _rich.join_live_collab(session, snapshot);
+            _rich.toast(_("You are writing with %s.").printf(from));
+            release();
+        }
+
         protected override void activate() {
             if (present_existing()) return;
             build_window();

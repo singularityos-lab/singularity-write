@@ -496,6 +496,31 @@ namespace Singularity.Apps {
             send_presence();
         }
 
+        public async void start_live_collab(Singularity.Collab.Person person, string title) throws Error {
+            if (live != null && live.mode == WriteLiveSession.Mode.COLLAB && live.collab_hosting) {
+                yield live.host_collab(live_doc.full_state(doc), person, title);
+                return;
+            }
+            stop_live();
+            live_doc = new Write.LiveDoc("host");
+            var s = new WriteLiveSession(ed.author);
+            live_doc.peer_id = s.my_id;
+            first_packet = false;
+            live_attach(s);
+            yield s.host_collab(live_doc.full_state(doc), person, title);
+            send_presence();
+        }
+
+        public void join_live_collab(string session, string snapshot) {
+            stop_live();
+            var s = new WriteLiveSession(ed.author);
+            live_doc = new Write.LiveDoc(s.my_id);
+            first_packet = true;
+            live_attach(s);
+            s.join_collab(session, snapshot);
+            send_presence();
+        }
+
         public void start_live_folder(string dir, bool create) throws Error {
             stop_live();
             var s = new WriteLiveSession(ed.author);
@@ -526,7 +551,8 @@ namespace Singularity.Apps {
             var f = Write.LiveDoc.position_of(doc, ed.focus);
             var a = Write.LiveDoc.position_of(doc, ed.anchor);
             live_applying = true;
-            bool joining = first_packet && live.mode != WriteLiveSession.Mode.HOST;
+            bool joining = first_packet && live.mode != WriteLiveSession.Mode.HOST
+                && !(live.mode == WriteLiveSession.Mode.COLLAB && live.collab_hosting);
             first_packet = false;
             if (joining) {
                 doc.body.items.clear();
@@ -719,9 +745,7 @@ namespace Singularity.Apps {
                     string[] parts = ch.title.substring(ChartSupport.LINK_PREFIX.length).split("\t");
                     if (parts.length < 3) continue;
                     try {
-                        var bus = yield GLib.Bus.get(BusType.SESSION);
-                        var reply = yield bus.call("dev.sinty.spreadsheet", "/dev/sinty/spreadsheet/Charts", "dev.sinty.Spreadsheet1", "ChartXml",
-                            new Variant("(sss)", parts[0], parts[1], parts[2]), new VariantType("(s)"), DBusCallFlags.NONE, 30000, null);
+                        var reply = yield Capabilities.call(Contracts.SPREADSHEET, "ChartXml", new Variant("(sss)", parts[0], parts[1], parts[2]), new VariantType("(s)"));
                         var spec = Singularity.Charts.DrawingML.read_chart(reply.get_child_value(0).get_string());
                         if (spec == null) throw new IOError.INVALID_DATA(_("The chart could not be read"));
                         if (updated + failed == 0) ed.checkpoint(_("Update Linked Charts"));
@@ -730,7 +754,7 @@ namespace Singularity.Apps {
                         updated++;
                     } catch (Error e) {
                         failed++;
-                        if (e is DBusError.SERVICE_UNKNOWN) {
+                        if (e is DBusError.SERVICE_UNKNOWN || e is IOError.NOT_SUPPORTED) {
                             last_error = _("Spreadsheet is not available");
                         } else {
                             DBusError.strip_remote_error(e);
@@ -1000,7 +1024,7 @@ namespace Singularity.Apps {
             if (sr != null && !ed.has_selection) {
                 var p = ed.focus.para;
                 string word = usub(p.text(), sr.start, sr.end);
-                string[] sugg = sr.grammar && sr.issue != null ? sr.issue.suggestions : Singularity.Text.SpellChecker.get_default().suggest(word, 5);
+                string[] sugg = sr.grammar && sr.issue != null ? sr.issue.suggestions : view.spell_checker_at(new Pos(p, sr.start)).suggest(word, 5);
                 if (sr.grammar && sr.issue != null) menu.add_item(sr.issue.message, "dialog-information-symbolic", () => {});
                 foreach (string s in sugg) {
                     string rep = s;
@@ -1019,7 +1043,7 @@ namespace Singularity.Apps {
                         view.refresh_spelling();
                     });
                     menu.add_item(_("Add to Dictionary"), "list-add-symbolic", () => {
-                        Singularity.Text.SpellChecker.get_default().add_to_dictionary(word);
+                        view.spell_checker_at(new Pos(p, sr.start)).add_to_dictionary(word);
                         view.refresh_spelling();
                     });
                     menu.add_item(_("Synonyms\u2026"), "accessories-dictionary-symbolic", () => WriteDialogs.thesaurus(this, word));
