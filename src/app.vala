@@ -50,6 +50,7 @@ namespace Singularity.Apps {
         public WriteApp() {
             Object(application_id: "dev.sinty.write",
                    flags: ApplicationFlags.HANDLES_OPEN);
+            WriteIntents.install(this);
             add_main_option("new-note", 0, OptionFlags.NONE, OptionArg.NONE,
                             _("Start a new Markdown note"), null);
             add_main_option("new-document", 0, OptionFlags.NONE, OptionArg.NONE,
@@ -1913,6 +1914,17 @@ namespace Singularity.Apps {
                 _rich.view.grab_focus();
                 return GLib.Source.REMOVE;
             });
+        }
+
+        internal WriteRichEditor agent_new() {
+            activate();
+            new_document();
+            return _rich;
+        }
+
+        internal WriteRichEditor agent_editor() throws Error {
+            if (_rich == null || _is_markdown || _layout_stack.visible_child_name != "rich") throw new IOError.NOT_FOUND("no document is open");
+            return _rich;
         }
 
         private void new_document() {

@@ -81,6 +81,7 @@ sources = files(
   'src/main.vala',
   'src/window.vala',
   'src/app.vala',
+  'src/agent_intents.vala',
   'src/collab_bus.vala',
   'src/cloud_actions.vala',
   'src/formula_bridge.vala',
