@@ -892,7 +892,7 @@ namespace Singularity.Apps {
             ed.set_caret(new Pos(p, 0));
         }
 
-        public void insert_comment() {
+        public void insert_comment(bool edit = true) {
             if (doc.protection.enforced && doc.protection.kind == ProtectKind.READ_ONLY) return;
             ed.checkpoint(_("New Comment"));
             string id = doc.next_id().to_string();
@@ -917,7 +917,7 @@ namespace Singularity.Apps {
             ed.changed();
             show_right("comments");
             comments_pane.refresh();
-            comments_pane.focus_comment(id, true);
+            if (edit) comments_pane.focus_comment(id, true);
         }
 
         public void delete_comment(string id) {
