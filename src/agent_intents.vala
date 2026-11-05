@@ -436,6 +436,29 @@ namespace Singularity.Apps {
                     node.get_object ().set_string_member ("format", fmt.label ());
                     return verified (node, f.query_exists ());
                 });
+            agent.set_context_provider (() => {
+                WriteRichEditor r;
+                try {
+                    r = app.agent_editor ();
+                } catch (Error e) {
+                    return null;
+                }
+                var node = brief (r);
+                var o = node.get_object ();
+                o.set_string_member ("title", r.file != null ? r.file.get_basename () : "Untitled");
+                var list = Write.Story.paragraphs (r.doc.body);
+                int index = list.index_of (r.ed.focus.para);
+                o.set_int_member ("paragraphs", list.size);
+                o.set_member ("cursor", para_node (r.doc, r.ed.focus.para, index));
+                if (r.ed.has_selection) {
+                    string sel = r.ed.selected_text ();
+                    o.set_string_member ("selection", sel.length > 2000 ? sel.substring (0, sel.index_of_nth_char (2000)) : sel);
+                }
+                o.set_boolean_member ("track_changes", r.doc.track_changes);
+                o.set_int_member ("comments", r.doc.comments.size);
+                o.set_boolean_member ("read_only", !r.editable ());
+                return node;
+            });
             agent.add_intent ("write_save", "Save the open document, to its file or to a new path given with the format of its extension.",
                 "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}",
                 Singularity.AppIntentRisk.IRREVERSIBLE, (args) => {
@@ -447,6 +470,8 @@ namespace Singularity.Apps {
                     if (r.file == null) throw new IOError.INVALID_ARGUMENT ("the document has no file yet");
                     WriteFiles.save (r, r.file, r.format);
                     r.modified = false;
+                    r.title_changed ();
+                    r.update_status ();
                     return brief (r);
                 });
         }
