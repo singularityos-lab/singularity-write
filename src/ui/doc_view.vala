@@ -144,6 +144,7 @@ namespace Singularity.Apps {
             can_focus = true;
             hexpand = true;
             vexpand = true;
+            overflow = Gtk.Overflow.HIDDEN;
             add_css_class("write-docview");
             set_cursor_from_name("text");
             im = new Gtk.IMMulticontext();
