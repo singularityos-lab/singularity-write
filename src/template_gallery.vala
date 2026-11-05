@@ -107,9 +107,7 @@ namespace Singularity.Apps {
             _current = _queue.pop_head();
             if (_current == null) return;
             if (_view == null) {
-                _view = (WebKit.WebView) Object.new(typeof(WebKit.WebView),
-                    "web-context", new WebKit.WebContext(),
-                    "network-session", new WebKit.NetworkSession.ephemeral());
+                _view = new WebKit.WebView();
                 _view.load_changed.connect(on_load_changed);
             }
             _timeout_id = GLib.Timeout.add_seconds(8, () => {
