@@ -7,6 +7,7 @@ Icon=dev.sinty.write
 Terminal=false
 Type=Application
 Categories=Office;WordProcessor;
+X-Sinty-FormFactors=desktop;tablet;phone
 MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.openxmlformats-officedocument.wordprocessingml.template;application/vnd.ms-word.document.macroEnabled.12;application/vnd.oasis.opendocument.text;application/vnd.oasis.opendocument.text-template;application/rtf;text/rtf;application/msword;application/epub+zip;text/html;text/markdown;text/x-markdown;text/plain;
 StartupWMClass=dev.sinty.write
 Actions=new-document;new-note;new-from-template;
