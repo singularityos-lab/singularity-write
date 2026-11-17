@@ -3,8 +3,17 @@ using GLib;
 namespace Singularity.Apps {
 
     public class FormulaBridge : Object {
+        public static string? executable() {
+            var info = new DesktopAppInfo("dev.sinty.formula.desktop");
+            if (info != null) {
+                string? exe = info.get_executable();
+                if (exe != null && Path.is_absolute(exe) && FileUtils.test(exe, FileTest.IS_EXECUTABLE)) return exe;
+            }
+            return Environment.find_program_in_path("singularity-formula");
+        }
+
         public static bool available() {
-            return Environment.find_program_in_path("singularity-formula") != null;
+            return executable() != null;
         }
 
         public static string new_target() {
@@ -50,7 +59,7 @@ namespace Singularity.Apps {
 
         public static async bool edit(string target, string? latex) {
             int64 before = FileUtils.test(target, FileTest.EXISTS) ? mtime(target) : -1;
-            string[] argv = { "singularity-formula", "--insert", target };
+            string[] argv = { executable() ?? "singularity-formula", "--insert", target };
             if (latex != null && latex != "") {
                 argv += "--latex";
                 argv += latex;
