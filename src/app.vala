@@ -816,18 +816,22 @@ namespace Singularity.Apps {
                 else if (_md_buffer != null && _md_buffer.can_redo) _md_buffer.redo();
             });
             add_simple("cut", () => {
+                if (field_edit("cut-clipboard")) return;
                 if (in_rich()) _rich.run("cut", null);
                 else Signal.emit_by_name(active_view(), "cut-clipboard");
             });
             add_simple("copy", () => {
+                if (field_edit("copy-clipboard")) return;
                 if (in_rich()) _rich.run("copy", null);
                 else Signal.emit_by_name(active_view(), "copy-clipboard");
             });
             add_simple("paste", () => {
+                if (field_edit("paste-clipboard")) return;
                 if (in_rich()) _rich.run("paste", null);
                 else Signal.emit_by_name(active_view(), "paste-clipboard");
             });
             add_simple("select-all", () => {
+                if (field_edit("select-all")) return;
                 if (in_rich()) {
                     _rich.run("select-all", null);
                     return;
@@ -1765,6 +1769,23 @@ namespace Singularity.Apps {
             FormulaBridge.discard(target);
             if (tex == null || _md_buffer == null) return;
             _md_buffer.insert_at_cursor("$$" + tex + "$$", -1);
+        }
+
+        private bool field_edit(string what) {
+            var win = get_active_window();
+            var focus = win != null ? win.get_focus() : null;
+            if (focus == null) return false;
+            var text = focus as Gtk.Text;
+            if (text != null) {
+                if (what == "select-all") text.select_region(0, -1);
+                else Signal.emit_by_name(text, what);
+                return true;
+            }
+            var view = focus as Gtk.TextView;
+            if (view == null || win == main_window) return false;
+            if (what == "select-all") Signal.emit_by_name(view, "select-all", true);
+            else Signal.emit_by_name(view, what);
+            return true;
         }
 
         private Gtk.TextView active_view() {

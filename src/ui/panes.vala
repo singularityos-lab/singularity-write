@@ -578,14 +578,18 @@ namespace Singularity.Apps {
             var tv = new Gtk.TextView();
             tv.wrap_mode = WrapMode.WORD_CHAR;
             tv.buffer.text = cm.text();
-            tv.vexpand = true;
-            tv.margin_start = 18;
-            tv.margin_end = 18;
-            tv.margin_top = 6;
-            tv.margin_bottom = 12;
             tv.add_css_class("write-comment-editor");
             Singularity.Text.SpellIntegration.attach(tv);
-            dlg.content_box.append(tv);
+            var scroll = new Gtk.ScrolledWindow();
+            scroll.hscrollbar_policy = Gtk.PolicyType.NEVER;
+            scroll.vexpand = true;
+            scroll.height_request = 160;
+            scroll.margin_start = 18;
+            scroll.margin_end = 18;
+            scroll.margin_top = 6;
+            scroll.margin_bottom = 12;
+            scroll.child = tv;
+            dlg.content_box.append(scroll);
             bool saved = false;
             WriteDialogs.footer(dlg, _("Save"), () => {
                 saved = true;
