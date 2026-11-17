@@ -224,6 +224,17 @@ namespace Write {
             return r;
         }
 
+        private Revision typing_rev(Paragraph p, int offset) {
+            int pos = 0;
+            foreach (var it in p.inlines) {
+                pos += it.length;
+                if (pos < offset) continue;
+                if (pos == offset && it is TextRun && it.rev != null && it.rev.kind == RevKind.INSERT && it.rev.author == author) return it.rev.copy();
+                break;
+            }
+            return new_rev(RevKind.INSERT);
+        }
+
         public void checkpoint(string label, bool coalesce = false) {
             int64 now = get_monotonic_time();
             if (coalesce && group_label == label && group_para == focus.para && now - group_time < 1500000) {
@@ -307,12 +318,12 @@ namespace Write {
                             focus = new Pos(p, focus.offset + 1);
                         }
                         if (segs[k] != "") {
-                            p.insert_text(focus.offset, segs[k], cp, tracking ? new_rev(RevKind.INSERT) : null);
+                            p.insert_text(focus.offset, segs[k], cp, tracking ? typing_rev(p, focus.offset) : null);
                             focus = new Pos(p, focus.offset + segs[k].char_count());
                         }
                     }
                 } else {
-                    p.insert_text(focus.offset, part, cp, tracking ? new_rev(RevKind.INSERT) : null);
+                    p.insert_text(focus.offset, part, cp, tracking ? typing_rev(p, focus.offset) : null);
                     focus = new Pos(p, focus.offset + part.char_count());
                 }
                 p.touch();

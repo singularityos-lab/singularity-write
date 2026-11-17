@@ -1248,6 +1248,10 @@ namespace Singularity.Apps {
             }
         }
 
+        private double pre_read_zoom = 1.0;
+        private bool pre_read_fit_width = false;
+        private bool pre_read_fit_page = false;
+
         public void set_view_mode(string mode) {
             ViewMode m = ViewMode.PRINT;
             switch (mode) {
@@ -1257,13 +1261,25 @@ namespace Singularity.Apps {
                 case "draft": m = ViewMode.DRAFT; break;
                 default: m = ViewMode.PRINT; break;
             }
+            bool was_read = view.mode == ViewMode.READ;
+            if (m == ViewMode.READ && !was_read) {
+                pre_read_zoom = view.zoom;
+                pre_read_fit_width = view.fit_width;
+                pre_read_fit_page = view.fit_page;
+            }
             view.read_only = m == ViewMode.READ;
             view.set_mode(m);
             if (m == ViewMode.READ) {
                 view.fit_page = true;
                 view.relayout_now();
-            } else {
-                view.fit_page = false;
+            } else if (was_read) {
+                if (pre_read_fit_width || pre_read_fit_page) {
+                    view.fit_width = pre_read_fit_width;
+                    view.fit_page = pre_read_fit_page;
+                    view.relayout_now();
+                } else {
+                    view.set_zoom(pre_read_zoom);
+                }
             }
             fbar.visible = m != ViewMode.READ;
             ruler_rev.visible = m == ViewMode.PRINT;

@@ -22,7 +22,7 @@
       <summary>Show the document outline sidebar</summary>
     </key>
     <key name="autosave-interval" type="i">
-      <default>60</default>
+      <default>0</default>
       <summary>Autosave interval in seconds, 0 to disable</summary>
     </key>
     <key name="left-margin-mm" type="d">
