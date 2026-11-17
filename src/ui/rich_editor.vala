@@ -786,11 +786,19 @@ namespace Singularity.Apps {
             ed.checkpoint(_("Insert Equation"));
             var c = doc.styles.resolve_char(ed.focus.para, ed.props_for_insert());
             yield EquationSupport.render(e, c.size > 0 ? c.size : 11);
-            if (e.display) {
-                if (!ed.focus.para.is_empty()) ed.split_paragraph();
-                ed.format_paragraphs((p) => p.props.align = Write.Align.CENTER);
-            }
+            if (e.display) display_line();
             ed.insert_inline(e);
+        }
+
+        private void display_line() {
+            var cur = ed.focus.para;
+            if (ed.focus.offset < cur.length) {
+                ed.split_paragraph();
+                ed.focus = new Write.Pos(cur, cur.length);
+                ed.anchor = ed.focus.copy();
+            }
+            if (!ed.focus.para.is_empty()) ed.split_paragraph();
+            ed.format_paragraphs((p) => p.props.align = Write.Align.CENTER);
         }
 
         public async void insert_equation(bool display) {
@@ -804,10 +812,7 @@ namespace Singularity.Apps {
             ed.checkpoint(_("Insert Equation"));
             var c = doc.styles.resolve_char(ed.focus.para, ed.props_for_insert());
             yield EquationSupport.render(e, c.size > 0 ? c.size : 11);
-            if (display) {
-                if (!ed.focus.para.is_empty()) ed.split_paragraph();
-                ed.format_paragraphs((p) => p.props.align = Write.Align.CENTER);
-            }
+            if (display) display_line();
             ed.insert_inline(e);
         }
 

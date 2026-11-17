@@ -6,8 +6,8 @@ namespace Write {
         public static Cairo.ImageSurface? get_surface(Bytes data) {
             if (cache == null) cache = new Gee.HashMap<Bytes, Cairo.ImageSurface?>();
             if (cache.has_key(data)) return cache[data];
-            Cairo.ImageSurface? s = null;
-            try {
+            Cairo.ImageSurface? s = from_png(data);
+            if (s == null) try {
                 var loader = new Gdk.PixbufLoader();
                 loader.write(data.get_data());
                 loader.close();
@@ -23,6 +23,19 @@ namespace Write {
             if (cache.size > 200) cache.clear();
             cache[data] = s;
             return s;
+        }
+
+        private static Cairo.ImageSurface? from_png(Bytes data) {
+            unowned uint8[] raw = data.get_data();
+            if (raw.length < 8 || raw[0] != 0x89 || raw[1] != 'P' || raw[2] != 'N' || raw[3] != 'G') return null;
+            size_t pos = 0;
+            var s = new Cairo.ImageSurface.from_png_stream((buf) => {
+                if (pos + buf.length > raw.length) return Cairo.Status.READ_ERROR;
+                Memory.copy(buf, &raw[pos], buf.length);
+                pos += buf.length;
+                return Cairo.Status.SUCCESS;
+            });
+            return s.status() == Cairo.Status.SUCCESS ? s : null;
         }
     }
 

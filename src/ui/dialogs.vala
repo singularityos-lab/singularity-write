@@ -28,6 +28,7 @@ namespace Singularity.Apps {
             var scroll = new ScrolledWindow();
             scroll.hscrollbar_policy = PolicyType.NEVER;
             scroll.vexpand = true;
+            scroll.propagate_natural_height = true;
             var box = new Box(Orientation.VERTICAL, 14);
             box.margin_start = 18;
             box.margin_end = 18;
@@ -512,7 +513,7 @@ namespace Singularity.Apps {
         }
 
         public static void insert_table(WriteRichEditor r) {
-            var dlg = make(r, _("Insert Table"), 380, 420);
+            var dlg = make(r, _("Insert Table"), 380, -1);
             var box = body(dlg);
             var g = new PreferencesGroup();
             var rows = spin_row(g, _("Rows"), null, 1, 500, 1, 3, 0);
