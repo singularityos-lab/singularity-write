@@ -2069,21 +2069,63 @@ namespace Singularity.Apps {
             attribute_values = {};
         }
 
+        private Pos? pos_at(uint offset) {
+            uint off = 0;
+            Paragraph? last = null;
+            foreach (var q in Story.paragraphs(doc.body)) {
+                uint len = (uint) q.plain_text().char_count();
+                if (offset <= off + len) return new Pos(q, (int) (offset - off));
+                off += len + 1;
+                last = q;
+            }
+            return last != null ? new Pos(last, last.length) : null;
+        }
+
         public bool get_extents(uint start, uint end, Graphene.Rect extents) {
-            return false;
+            var a = pos_at(start);
+            var b = pos_at(end);
+            if (a == null || b == null) return false;
+            int pa, pb;
+            double xa, ya, ha, xb, yb, hb;
+            if (!caret_rect(a, out pa, out xa, out ya, out ha)) return false;
+            if (!caret_rect(b, out pb, out xb, out yb, out hb)) return false;
+            double wxa, wya, wxb, wyb;
+            page_to_widget(pa, xa, ya, out wxa, out wya);
+            page_to_widget(pb, xb, yb, out wxb, out wyb);
+            double bottom = wyb + hb * scale;
+            if (pa == pb && ya == yb) {
+                extents.init((float) double.min(wxa, wxb), (float) wya, (float) (wxb - wxa).abs(), (float) (bottom - wya));
+            } else {
+                extents.init(0, (float) wya, get_width(), (float) (bottom - wya));
+            }
+            return true;
         }
 
         public bool get_offset(Graphene.Point point, out uint offset) {
             offset = 0;
-            return false;
+            int page;
+            double px, py;
+            to_page(point.x, point.y, out page, out px, out py);
+            var pos = hit(page, px, py);
+            if (pos == null) return false;
+            offset = global_offset(pos);
+            return true;
         }
 
         public bool set_caret_position(uint offset) {
-            return false;
+            var pos = pos_at(offset);
+            if (ed == null || pos == null) return false;
+            ed.set_caret(pos);
+            return true;
         }
 
         public bool set_selection(size_t i, Gtk.AccessibleTextRange range) {
-            return false;
+            if (i != 0 || ed == null) return false;
+            var a = pos_at((uint) range.start);
+            var b = pos_at((uint) (range.start + range.length));
+            if (a == null || b == null) return false;
+            ed.select(a, b);
+            return true;
         }
     }
 }
