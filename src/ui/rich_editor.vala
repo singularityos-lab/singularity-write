@@ -1416,5 +1416,129 @@ namespace Singularity.Apps {
                 }
             }
         }
+
+        private static Variant docx(Write.Document d) throws Error {
+            return new Variant.from_bytes(VariantType.BYTESTRING, new Bytes(DocxWriter.save(d)), true);
+        }
+
+        private static Variant snapshots(Gee.ArrayList<Write.Snapshot> list) {
+            var b = new VariantBuilder(new VariantType("a(ayiiiis)"));
+            foreach (var s in list) {
+                try {
+                    b.add("(@ayiiiis)", docx(s.doc), s.anchor_para, s.anchor_off, s.focus_para, s.focus_off, s.label);
+                } catch (Error e) {
+                }
+            }
+            return b.end();
+        }
+
+        private static void unpack_snapshots(Variant v, Gee.ArrayList<Write.Snapshot> list) {
+            list.clear();
+            var it = v.iterator();
+            Variant data;
+            int ap, ao, fp, fo;
+            string label;
+            while (it.next("(@ayiiiis)", out data, out ap, out ao, out fp, out fo, out label)) {
+                try {
+                    var s = new Write.Snapshot();
+                    s.doc = DocxReader.load(data.get_data_as_bytes().get_data());
+                    s.anchor_para = ap;
+                    s.anchor_off = ao;
+                    s.focus_para = fp;
+                    s.focus_off = fo;
+                    s.label = label;
+                    list.add(s);
+                } catch (Error e) {
+                }
+            }
+        }
+
+        private string view_mode_name() {
+            switch (view.mode) {
+                case ViewMode.WEB: return "web";
+                case ViewMode.READ: return "read";
+                case ViewMode.OUTLINE: return "outline";
+                case ViewMode.DRAFT: return "draft";
+                default: return "print";
+            }
+        }
+
+        public void check_migration() throws Singularity.Migration.MigrationError {
+            if (live != null) throw new Singularity.Migration.MigrationError.UNSUPPORTED(_("Leave the shared writing session before moving Write"));
+            try {
+                DocxWriter.save(doc);
+            } catch (Error e) {
+                throw new Singularity.Migration.MigrationError.FAILED(_("The document could not be prepared for the move: %s").printf(e.message));
+            }
+        }
+
+        public Variant save_migration() {
+            var d = new VariantDict();
+            try {
+                d.insert_value("document", docx(doc));
+            } catch (Error e) {
+            }
+            d.insert_value("file", new Variant.string(file != null ? Singularity.Migration.portable_path(file) : ""));
+            d.insert_value("format", new Variant.string(format.extension()));
+            d.insert_value("modified", new Variant.boolean(modified));
+            var all = Story.all(doc);
+            d.insert_value("selection", new Variant("(iiii)", all.index_of(ed.anchor.para), ed.anchor.offset, all.index_of(ed.focus.para), ed.focus.offset));
+            d.insert_value("undo", snapshots(ed.undo.undo_list));
+            d.insert_value("redo", snapshots(ed.undo.redo_list));
+            d.insert_value("mode", new Variant.string(view_mode_name()));
+            d.insert_value("zoom", new Variant("(dbb)", view.zoom, view.fit_width, view.fit_page));
+            d.insert_value("comments", new Variant.boolean(view.show_comments));
+            d.insert_value("pane", new Variant.string(right_rev.reveal_child ? right_stack.visible_child_name : ""));
+            d.insert_value("sidebar", new Variant("(bs)", sidebar_on, nav.page));
+            return d.end();
+        }
+
+        public void restore_migration(VariantDict d) {
+            var undo = d.lookup_value("undo", new VariantType("a(ayiiiis)"));
+            if (undo != null) unpack_snapshots(undo, ed.undo.undo_list);
+            var redo = d.lookup_value("redo", new VariantType("a(ayiiiis)"));
+            if (redo != null) unpack_snapshots(redo, ed.undo.redo_list);
+            ed.undo.changed();
+            var sel = d.lookup_value("selection", new VariantType("(iiii)"));
+            if (sel != null) {
+                int ap, ao, fp, fo;
+                sel.get("(iiii)", out ap, out ao, out fp, out fo);
+                var all = Story.all(doc);
+                if (ap >= 0 && ap < all.size && fp >= 0 && fp < all.size) ed.select(new Pos(all[ap], ao), new Pos(all[fp], fo));
+            }
+            var mode = d.lookup_value("mode", VariantType.STRING);
+            if (mode != null && mode.get_string() != view_mode_name()) set_view_mode(mode.get_string());
+            var zoom = d.lookup_value("zoom", new VariantType("(dbb)"));
+            if (zoom != null && view.mode != ViewMode.READ) {
+                double z;
+                bool width, page;
+                zoom.get("(dbb)", out z, out width, out page);
+                if (width) set_zoom_named("width");
+                else if (page) set_zoom_named("page");
+                else view.set_zoom(z);
+            }
+            var comments = d.lookup_value("comments", VariantType.BOOLEAN);
+            if (comments != null && comments.get_boolean() != view.show_comments) {
+                view.show_comments = comments.get_boolean();
+                view.relayout_now();
+            }
+            var pane = d.lookup_value("pane", VariantType.STRING);
+            if (pane != null && pane.get_string() != "" && right_stack.get_child_by_name(pane.get_string()) != null) show_right(pane.get_string());
+            var sidebar = d.lookup_value("sidebar", new VariantType("(bs)"));
+            if (sidebar != null) {
+                bool on;
+                string page;
+                sidebar.get("(bs)", out on, out page);
+                if (page != "") nav.show_page(page);
+                GLib.Idle.add(() => {
+                    show_left(on);
+                    return GLib.Source.REMOVE;
+                });
+            }
+            var mod = d.lookup_value("modified", VariantType.BOOLEAN);
+            if (mod != null) modified = mod.get_boolean();
+            title_changed();
+            state_changed();
+        }
     }
 }

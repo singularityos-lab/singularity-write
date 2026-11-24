@@ -7,7 +7,7 @@ using Singularity.Widgets;
 
 namespace Singularity.Apps {
 
-    public class WriteApp : Singularity.Application {
+    public class WriteApp : Singularity.Application, Singularity.Migration.Migratable {
 
         public delegate void Done();
 
@@ -161,6 +161,127 @@ namespace Singularity.Apps {
         public void open_document(GLib.File file) {
             GLib.File[] files = { file };
             open(files, "");
+        }
+
+        public void prepare_move() throws Singularity.Migration.MigrationError {
+            if (main_window != null && in_rich()) _rich.check_migration();
+        }
+
+        public Variant save_model() {
+            return new VariantDict().end();
+        }
+
+        public async void restore_model(Variant model) throws Error {
+        }
+
+        public string window_kind(Gtk.Window w) {
+            return w == main_window ? "write" : "";
+        }
+
+        public Variant save_window(Gtk.Window w) {
+            var d = new VariantDict();
+            d.insert_value("layout", new Variant.string(layout()));
+            if (in_rich()) {
+                d.insert_value("rich", _rich.save_migration());
+            } else if (in_markdown()) {
+                d.insert_value("text", new Variant.string(_md_buffer.text));
+                d.insert_value("file", new Variant.string(current_file != null ? Singularity.Migration.portable_path(current_file) : ""));
+                d.insert_value("name", new Variant.string(_suggested_name ?? ""));
+                d.insert_value("modified", new Variant.boolean(modified));
+            }
+            return d.end();
+        }
+
+        public string[] files() {
+            if (main_window == null) return {};
+            if (in_rich() && _rich.file != null) return { Singularity.Migration.portable_path(_rich.file) };
+            if (in_markdown() && current_file != null) return { Singularity.Migration.portable_path(current_file) };
+            return {};
+        }
+
+        public async Gtk.Window? rebuild_window(string kind, Variant data) throws Error {
+            if (kind != "write") return null;
+            drop_window();
+            build_window();
+            var d = new VariantDict(data);
+            var saved = d.lookup_value("layout", VariantType.STRING);
+            switch (saved != null ? saved.get_string() : "start") {
+                case "rich":
+                    var rich = d.lookup_value("rich", VariantType.VARDICT);
+                    if (rich == null) {
+                        new_document();
+                        break;
+                    }
+                    restore_rich(new VariantDict(rich));
+                    break;
+                case "markdown":
+                    restore_markdown(d);
+                    break;
+                default:
+                    show_start_page();
+                    break;
+            }
+            return main_window;
+        }
+
+        private void restore_rich(VariantDict d) {
+            var data = d.lookup_value("document", VariantType.BYTESTRING);
+            Write.Document doc;
+            try {
+                doc = data != null ? Write.DocxReader.load(data.get_data_as_bytes().get_data()) : Write.Document.create_blank();
+            } catch (Error e) {
+                doc = Write.Document.create_blank();
+            }
+            var path = d.lookup_value("file", VariantType.STRING);
+            GLib.File? file = path != null && path.get_string() != "" ? Singularity.Migration.local_file(path.get_string()) : null;
+            var ext = d.lookup_value("format", VariantType.STRING);
+            show_rich_document(doc, file, ext != null ? Write.FileFormat.from_extension("x." + ext.get_string()) : default_format());
+            _rich.restore_migration(d);
+        }
+
+        private void restore_markdown(VariantDict d) {
+            _is_markdown = true;
+            enter_markdown_mode();
+            var text = d.lookup_value("text", VariantType.STRING);
+            _md_buffer.begin_irreversible_action();
+            _md_buffer.set_text(text != null ? text.get_string() : "", -1);
+            _md_buffer.end_irreversible_action();
+            var path = d.lookup_value("file", VariantType.STRING);
+            current_file = path != null && path.get_string() != "" ? Singularity.Migration.local_file(path.get_string()) : null;
+            var name = d.lookup_value("name", VariantType.STRING);
+            _suggested_name = name != null && name.get_string() != "" ? name.get_string() : null;
+            var mod = d.lookup_value("modified", VariantType.BOOLEAN);
+            modified = mod != null && mod.get_boolean();
+            update_title();
+            GLib.Idle.add(() => { update_md_preview(); return GLib.Source.REMOVE; });
+        }
+
+        private void drop_window() {
+            if (autosave_id != 0) {
+                Source.remove(autosave_id);
+                autosave_id = 0;
+            }
+            if (_md_update_timer != 0) {
+                Source.remove(_md_update_timer);
+                _md_update_timer = 0;
+            }
+            var old = main_window;
+            main_window = null;
+            _md_ui_built = false;
+            _is_markdown = false;
+            _doc_bubbles = new GLib.List<Widget>();
+            _outline_bubble = null;
+            _context_switcher = null;
+            _md_switcher = null;
+            _search_bubble = null;
+            _recent_list_box = null;
+            _recovered_box = null;
+            _start_gallery = null;
+            current_file = null;
+            _suggested_name = null;
+            modified = false;
+            _last_search_query = "";
+            if (old != null) old.destroy();
         }
 
         private GLib.Settings load_settings() {
