@@ -7,7 +7,7 @@ using Singularity.Widgets;
 
 namespace Singularity.Apps {
 
-    public class WriteApp : Singularity.Application, Singularity.Migration.Migratable {
+    public class WriteApp : Singularity.Application, Singularity.Migration.Migratable, Singularity.Startup.Bootable {
 
         public delegate void Done();
 
@@ -119,7 +119,32 @@ namespace Singularity.Apps {
             release();
         }
 
-        protected override void activate() {
+        public Singularity.Startup.Plan build_plan(Singularity.Startup.Request request) {
+            var plan = new Singularity.Startup.Plan();
+            plan.version = "write-1";
+            if (request.kind == Singularity.Startup.RequestKind.SERVICE) {
+                plan.main("ready", Singularity.Startup.Category.PREPARE, (c) => {})
+                    .reaches(Singularity.Startup.Milestone.SHELL_READY)
+                    .reaches(Singularity.Startup.Milestone.CONTENT_READY)
+                    .reaches(Singularity.Startup.Milestone.INTERACTIVE);
+                return plan;
+            }
+            plan.main("window", Singularity.Startup.Category.SHELL, (c) => {
+                if (request.kind == Singularity.Startup.RequestKind.OPEN) open_files(request.files());
+                else show_window();
+                c.window = main_window;
+            }).reaches(Singularity.Startup.Milestone.SHELL_READY)
+              .reaches(Singularity.Startup.Milestone.CONTENT_READY)
+              .reaches(Singularity.Startup.Milestone.INTERACTIVE);
+            return plan;
+        }
+
+        public void handle_request(Singularity.Startup.Request request) {
+            if (request.kind == Singularity.Startup.RequestKind.OPEN) open_files(request.files());
+            else show_window();
+        }
+
+        private void show_window() {
             if (present_existing()) return;
             build_window();
             if (_pending_new_note) {
@@ -147,7 +172,7 @@ namespace Singularity.Apps {
             }
         }
 
-        protected override void open(GLib.File[] files, string hint) {
+        private void open_files(GLib.File[] files) {
             bool existing = present_existing();
             if (!existing) build_window();
             if (files.length > 0) {
