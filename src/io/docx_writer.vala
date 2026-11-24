@@ -1088,9 +1088,14 @@ namespace Write {
                     if (l.label_props != null && !l.label_props.is_empty()) {
                         var lp = l.label_props.copy();
                         if (l.format == NumFormat.BULLET && (lp.font == "Symbol" || lp.font == "Wingdings")) lp.font = null;
-                        o.raw("<w:rPr>");
-                        write_rpr_inner(o, lp);
-                        o.raw("</w:rPr>");
+                        var tmp = new XmlOut(false);
+                        write_rpr_inner(tmp, lp);
+                        string inner = tmp.str();
+                        if (inner != "") {
+                            o.raw("<w:rPr>");
+                            o.raw(inner);
+                            o.raw("</w:rPr>");
+                        }
                     }
                     o.raw("</w:lvl>");
                 }

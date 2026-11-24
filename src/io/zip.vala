@@ -128,15 +128,9 @@ namespace Write {
         private ByteArray out_data = new ByteArray();
         private ByteArray central = new ByteArray();
         private int count = 0;
-        private uint dos_time;
-        private uint dos_date;
+        private const uint DOS_TIME = 0;
+        private const uint DOS_DATE = (1 << 5) | 1;
         private Gee.HashSet<string> written = new Gee.HashSet<string>();
-
-        public ZipWriter() {
-            var now = new DateTime.now_local();
-            dos_time = (now.get_hour() << 11) | (now.get_minute() << 5) | (now.get_second() / 2);
-            dos_date = ((now.get_year() - 1980) << 9) | (now.get_month() << 5) | now.get_day_of_month();
-        }
 
         private static void put16(ByteArray b, uint v) {
             uint8[] x = { (uint8) (v & 0xff), (uint8) ((v >> 8) & 0xff) };
@@ -178,8 +172,8 @@ namespace Write {
             put16(out_data, 20);
             put16(out_data, 0x0800);
             put16(out_data, method);
-            put16(out_data, dos_time);
-            put16(out_data, dos_date);
+            put16(out_data, DOS_TIME);
+            put16(out_data, DOS_DATE);
             put32(out_data, crc);
             put32(out_data, payload.length);
             put32(out_data, content.length);
@@ -193,8 +187,8 @@ namespace Write {
             put16(central, 20);
             put16(central, 0x0800);
             put16(central, method);
-            put16(central, dos_time);
-            put16(central, dos_date);
+            put16(central, DOS_TIME);
+            put16(central, DOS_DATE);
             put32(central, crc);
             put32(central, payload.length);
             put32(central, content.length);
